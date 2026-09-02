@@ -1,0 +1,12 @@
+{
+  "name": "api-balance-checker",
+  "version": "1.0.0",
+  "description": "个人自用 API Key 聚合管理 + 余额查询桌面工具",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

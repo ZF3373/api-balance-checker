@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+  <title>API 余额查询</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🔑</span>
+      <h1>API Key 余额查询</h1>
+    </div>
+    <div class="actions">
+      <button id="refresh-all" class="btn btn-primary">↻ 刷新全部</button>
+      <button id="add-key" class="btn">+ 添加 Key</button>
+    </div>
+  </header>
+
+  <main class="content">
+    <div id="empty-state" class="empty-state">
+      <div class="empty-icon">📋</div>
+      <p>还没有添加任何 API Key</p>
+      <button id="empty-add" class="btn btn-primary">添加第一个 Key</button>
+    </div>
+
+    <div id="key-list" class="key-list"></div>
+  </main>
+
+  <!-- 添加/编辑对话框 -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2 id="modal-title">添加 API Key</h2>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <form id="key-form" class="modal-body">
+        <div class="field">
+          <label for="f-name">名称</label>
+          <input type="text" id="f-name" placeholder="如：DeepSeek 主号" required />
+        </div>
+
+        <div class="field">
+          <label for="f-provider">类型</label>
+          <select id="f-provider"></select>
+        </div>
+
+        <div class="field">
+          <label for="f-baseurl">Base URL</label>
+          <input type="text" id="f-baseurl" placeholder="https://api.example.com" />
+          <span id="f-baseurl-hint" class="hint"></span>
+        </div>
+
+        <div class="field">
+          <label for="f-apikey">API Key</label>
+          <input type="password" id="f-apikey" placeholder="sk-..." required />
+        </div>
+
+        <div id="custom-fields" class="custom-fields hidden">
+          <div class="field">
+            <label for="f-custom-path">余额接口路径</label>
+            <input type="text" id="f-custom-path" placeholder="v1/dashboard/billing/credit_grants" />
+          </div>
+          <div class="field">
+            <label for="f-custom-jsonpath">JSON 提取路径</label>
+            <input type="text" id="f-custom-jsonpath" placeholder="如 data.balance 或 balance_infos.0.total_balance" />
+            <span class="hint">用点号分隔，数组用下标</span>
+          </div>
+          <div class="field">
+            <label for="f-custom-currency">货币单位</label>
+            <input type="text" id="f-custom-currency" placeholder="CNY / USD" />
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn" id="modal-cancel">取消</button>
+          <button type="submit" class="btn btn-primary" id="modal-save">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
