@@ -347,8 +347,10 @@ function readJson(res) {
 
 /**
  * 通过 GitHub API 查询所有 release，按 published_at 时间找到最新的 nightly 版本。
- * 不能用 semver 比较 nightly 版本号（git SHA 部分无顺序），
- * 仅用 semver 判断是否比当前版本更高（major.minor.patch 部分）。
+ * 注意：不能用 semver 比较 nightly 版本号——git SHA 部分无顺序，
+ * semver 会按字典序比较 SHA（如 'f3' > '4d'），导致误判。
+ * 正确做法：用 published_at 时间戳判断哪个 release 最新，
+ * 只要版本号不同且当前版本更早就提示更新。
  */
 async function fetchLatestNightly() {
   const url = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/releases?per_page=30`;
@@ -370,9 +372,9 @@ async function fetchLatestNightly() {
   const latest = candidates[0];
   const tag = (latest.tag_name || '').replace(/^v/, '');
 
-  // 仅当 major.minor.patch 高于当前版本时才视为可更新
-  // （同一天多个 nightly，patch 相同时也提示更新，用 published_at 判断新旧）
-  if (semver.gte(tag, currentVersion) && tag !== currentVersion) {
+  // 只要最新 release 的版本号与当前不同，就提示更新
+  // （nightly 版本号含 git SHA，无法用 semver 比较先后，用 published_at 保证取到最新）
+  if (tag !== currentVersion) {
     return { tag, release: latest };
   }
   return null;
