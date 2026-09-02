@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
 const store = require('./store');
 const { PROVIDERS, PROVIDER_LIST } = require('./providers');
@@ -23,7 +23,7 @@ function createWindow() {
     minWidth: 860,
     minHeight: 560,
     title: 'API 余额查询',
-    backgroundColor: '#1a1b1e',
+    backgroundColor: '#0f1014',
     show: false,
     icon: path.join(__dirname, 'build', 'icon.svg'),
     webPreferences: {
@@ -48,7 +48,13 @@ function createWindow() {
 
 app.setAppUserModelId('com.zf3373.api-balance-checker');
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // 清除渲染缓存，确保更新后加载最新 UI（而非缓存的旧 HTML/CSS/JS）
+  await session.defaultSession.clearCache();
+  await session.defaultSession.clearStorageData({
+    storages: ['shadercache', 'serviceworkers', 'cachestorage'],
+  });
+
   store.init(app.getPath('userData'));
   createWindow();
 
