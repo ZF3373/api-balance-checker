@@ -37,7 +37,8 @@
     ],
     "win": {
       "target": ["nsis"],
-      "icon": "build/icon.svg"
+      "icon": "build/icon.svg",
+      "artifactName": "api-balance-checker-setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": true,
@@ -45,7 +46,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "runAfterFinish": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "api-balance-checker-setup-${version}.${ext}"
     },
     "publish": {
       "provider": "github",
