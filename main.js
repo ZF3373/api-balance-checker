@@ -2,19 +2,19 @@
 
 const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
+const semver = require('semver');
 const store = require('./store');
 const { PROVIDERS, PROVIDER_LIST } = require('./providers');
 const proxy = require('./proxy');
-const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 
 let mainWindow = null;
 
-// 自动更新日志
-autoUpdater.logger = log;
-autoUpdater.logger.transports.file.level = 'info';
-autoUpdater.autoDownload = true;
-autoUpdater.allowPrerelease = true; // 收 nightly 预发布
+log.transports.file.level = 'info';
+
+// ─── GitHub 仓库配置 ───
+const GH_OWNER = 'ZF3373';
+const GH_REPO = 'api-balance-checker';
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -49,8 +49,7 @@ function createWindow() {
 app.setAppUserModelId('com.zf3373.api-balance-checker');
 
 app.whenReady().then(async () => {
-  // Chromium 网络栈在某些环境下因 SSL 证书链不完整导致 GitHub 请求 404，
-  // 跳过证书验证确保 autoUpdater 能正常下载 latest.yml 和 exe
+  // 跳过证书验证，确保能正常访问 GitHub API 和下载安装包
   session.defaultSession.setCertificateVerifyProc((_request, callback) => {
     callback(0);
   });
@@ -63,11 +62,6 @@ app.whenReady().then(async () => {
 
   store.init(app.getPath('userData'));
   createWindow();
-
-  // 启动后自动检查更新（仅打包环境生效）
-  if (app.isPackaged) {
-    autoUpdater.checkForUpdates();
-  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -191,7 +185,12 @@ ipcMain.handle('server:getPort', () => store.getProxyPort());
 
 // ────────────────────── 自动更新 ──────────────────────
 
+const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+
 let updateInfo = null; // { version, progress, downloaded, checking, error }
+let downloadedInstallerPath = null;
 
 function sendUpdateStatus() {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -199,52 +198,149 @@ function sendUpdateStatus() {
   }
 }
 
+/**
+ * 通过 GitHub API 查询所有 release，按 published_at 时间找到最新的 nightly 版本。
+ * 不能用 semver 比较 nightly 版本号（git SHA 部分无顺序），
+ * 仅用 semver 判断是否比当前版本更高（major.minor.patch 部分）。
+ */
+async function fetchLatestNightly() {
+  const url = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/releases?per_page=30`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'api-balance-checker-updater', Accept: 'application/vnd.github+json' },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`);
+    const releases = await res.json();
+    const currentVersion = app.getVersion();
+
+    // 按 published_at 降序排列，取最新的 prerelease
+    const candidates = releases
+      .filter((r) => !r.draft && r.prerelease === true)
+      .filter((r) => semver.valid((r.tag_name || '').replace(/^v/, '')))
+      .sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
+
+    if (candidates.length === 0) return null;
+
+    const latest = candidates[0];
+    const tag = (latest.tag_name || '').replace(/^v/, '');
+
+    // 仅当 major.minor.patch 高于当前版本时才视为可更新
+    // （同一天多个 nightly，patch 相同时也提示更新，用 published_at 判断新旧）
+    if (semver.gte(tag, currentVersion) && tag !== currentVersion) {
+      return { tag, release: latest };
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 直接从 GitHub Release 下载安装包，带进度回调。
+ */
+function downloadInstaller(assetUrl, totalSize) {
+  return new Promise(async (resolve, reject) => {
+    const tmpDir = os.tmpdir();
+    const fileName = `api-balance-checker-update-${Date.now()}.exe`;
+    const filePath = path.join(tmpDir, fileName);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 300000); // 5 分钟超时
+
+    try {
+      const res = await fetch(assetUrl, {
+        headers: { 'User-Agent': 'api-balance-checker-updater' },
+        signal: controller.signal,
+        redirect: 'follow',
+      });
+      if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
+
+      const contentLength = totalSize || parseInt(res.headers.get('content-length') || '0', 10);
+      const fileStream = fs.createWriteStream(filePath);
+      let received = 0;
+
+      const reader = res.body.getReader();
+      const pump = async () => {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          fileStream.write(Buffer.from(value));
+          received += value.length;
+          if (contentLength > 0) {
+            const pct = Math.round((received / contentLength) * 100);
+            updateInfo = { ...updateInfo, progress: pct };
+            sendUpdateStatus();
+          }
+        }
+      };
+
+      await pump();
+      fileStream.end();
+      fileStream.on('finish', () => {
+        clearTimeout(timer);
+        downloadedInstallerPath = filePath;
+        resolve(filePath);
+      });
+      fileStream.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      reject(err);
+    }
+  });
+}
+
 ipcMain.handle('update:check', async () => {
   try {
     updateInfo = { ...updateInfo, checking: true, error: null };
     sendUpdateStatus();
-    const result = await autoUpdater.checkForUpdates();
+
+    // 用 GitHub API 找到真正最新的 nightly 版本（不依赖 Atom feed 排序）
+    const latest = await fetchLatestNightly();
+    if (!latest) {
+      updateInfo = { checking: false, notAvailable: true, error: null };
+      sendUpdateStatus();
+      return { ok: true };
+    }
+
+    // 找到安装包 asset
+    const asset = latest.release.assets.find(
+      (a) => a.name.endsWith('.exe') && !a.name.endsWith('.blockmap'),
+    );
+    if (!asset) {
+      updateInfo = { checking: false, error: 'Release 中未找到安装包' };
+      sendUpdateStatus();
+      return { ok: false, error: '未找到安装包' };
+    }
+
+    // 通知 UI 发现新版本，开始下载
+    updateInfo = { checking: false, version: latest.tag, progress: 0, downloaded: false, error: null };
+    sendUpdateStatus();
+
+    await downloadInstaller(asset.browser_download_url, asset.size);
+
+    updateInfo = { ...updateInfo, checking: false, downloaded: true, progress: 100 };
+    sendUpdateStatus();
     return { ok: true };
   } catch (err) {
-    updateInfo = { ...updateInfo, checking: false, error: String(err) };
+    const msg = err && err.name === 'AbortError' ? '请求超时' : (String(err.message || err));
+    updateInfo = { ...updateInfo, checking: false, error: msg };
     sendUpdateStatus();
-    return { ok: false, error: String(err) };
+    return { ok: false, error: msg };
   }
 });
 
 ipcMain.handle('update:install', () => {
-  autoUpdater.quitAndInstall({ isSilent: true, isForceRunAfter: true });
+  if (!downloadedInstallerPath) return { ok: false, error: '安装包未下载' };
+  // 启动安装包（NSIS installer 会自动关闭旧进程并覆盖安装）
+  const child = spawn(downloadedInstallerPath, ['--force-run'], { detached: true, stdio: 'ignore' });
+  child.unref();
+  app.quit();
   return { ok: true };
 });
 
 ipcMain.handle('update:getVersion', () => app.getVersion());
-
-autoUpdater.on('checking-for-update', () => {
-  updateInfo = { checking: true, error: null };
-  sendUpdateStatus();
-});
-
-autoUpdater.on('update-available', (info) => {
-  updateInfo = { checking: false, version: info.version, progress: 0, downloaded: false, error: null };
-  sendUpdateStatus();
-});
-
-autoUpdater.on('update-not-available', () => {
-  updateInfo = { checking: false, notAvailable: true, error: null };
-  sendUpdateStatus();
-});
-
-autoUpdater.on('download-progress', (progress) => {
-  updateInfo = { ...updateInfo, progress: Math.round(progress.percent), error: null };
-  sendUpdateStatus();
-});
-
-autoUpdater.on('update-downloaded', (info) => {
-  updateInfo = { ...updateInfo, checking: false, downloaded: true, version: info.version, progress: 100, error: null };
-  sendUpdateStatus();
-});
-
-autoUpdater.on('error', (err) => {
-  updateInfo = { ...updateInfo, checking: false, error: String(err) };
-  sendUpdateStatus();
-});
