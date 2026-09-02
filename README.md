@@ -62,10 +62,40 @@ npm run dist    # 生成 dist/ 目录下的安装包
 3. 启动后会显示：
    - **统一 API Key**：`sk-xxxxxxxx`（点 📋 复制，点 🔄 重新生成）
    - **端点地址**：`http://127.0.0.1:9527/v1`
-4. 在客户端（如 ChatBox、NextChat、OpenAI SDK）中配置：
+4. 在客户端（如 ChatBox、NextChat、OpenAI SDK、Anthropic SDK）中配置：
    - API Base URL: `http://127.0.0.1:9527/v1`
    - API Key: 统一 Key
 5. 代理会按 Key 列表顺序转发请求，失败自动切换到下一个 Key
+
+### 支持的接口
+
+代理同时支持 OpenAI 和 Anthropic 两种协议，客户端可自由选择：
+
+| 接口 | 方法 | 协议 | 说明 |
+|------|------|------|------|
+| `/v1/chat/completions` | POST | OpenAI | 对话补全，支持流式（SSE）和工具调用 |
+| `/v1/messages` | POST | Anthropic | Anthropic Messages 协议，需传 `anthropic-version` 头和 `max_tokens` |
+| `/v1/embeddings` | POST | OpenAI | 向量嵌入 |
+| `/v1/models` | GET | OpenAI | 聚合所有上游的模型列表去重返回 |
+
+**OpenAI 协议示例：**
+```bash
+curl http://127.0.0.1:9527/v1/chat/completions \
+  -H "Authorization: Bearer sk_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"你好"}],"stream":true}'
+```
+
+**Anthropic 协议示例：**
+```bash
+curl http://127.0.0.1:9527/v1/messages \
+  -H "Authorization: Bearer sk_xxx" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-v4-flash","max_tokens":512,"messages":[{"role":"user","content":"你好"}]}'
+```
+
+> 注意：两种协议的流式响应格式不同（OpenAI 用 `choices[0].delta.content`，Anthropic 用原生 Messages 事件），不要混用解析器。
 
 ### 检查更新
 

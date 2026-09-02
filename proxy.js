@@ -47,6 +47,7 @@ function buildUpstreamHeaders(req, keyEntry) {
   delete headers['authorization'];
   delete headers['x-api-key'];
   headers['authorization'] = `Bearer ${keyEntry.apiKey}`;
+  // 保留 Anthropic 协议特有的 anthropic-version 头
   return headers;
 }
 
@@ -185,6 +186,58 @@ async function handleEmbeddings(req, res, body) {
   });
 }
 
+// ─── Anthropic Messages 转发（带故障转移） ───
+
+async function handleMessages(req, res, body) {
+  const keys = store.getAllKeys();
+  if (keys.length === 0) {
+    return sendJson(res, 503, { error: { message: '没有可用的 API Key，请先添加', type: 'server_error' } });
+  }
+
+  let lastError = null;
+
+  for (const keyEntry of keys) {
+    const base = (keyEntry.baseUrl || '');
+    if (!base) continue;
+
+    try {
+      const upstreamRes = await tryUpstream(keyEntry, 'POST', 'v1/messages', body, req.headers);
+
+      if (upstreamRes.ok) {
+        relayResponse(res, upstreamRes);
+        return;
+      }
+
+      if (upstreamRes.status === 401 || upstreamRes.status === 403) {
+        lastError = `${keyEntry.name}: 鉴权失败(${upstreamRes.status})`;
+        continue;
+      }
+
+      if (upstreamRes.status === 429 || upstreamRes.status >= 500) {
+        const errText = await upstreamRes.text().catch(() => '');
+        lastError = `${keyEntry.name}: 上游错误(${upstreamRes.status}) ${errText.slice(0, 200)}`;
+        continue;
+      }
+
+      // 其他 4xx 直接返回
+      const errText = await upstreamRes.text().catch(() => '');
+      relayRawResponse(res, upstreamRes.status, upstreamRes.headers, errText);
+      return;
+    } catch (err) {
+      const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
+      lastError = `${keyEntry.name}: ${msg}`;
+      continue;
+    }
+  }
+
+  sendJson(res, 502, {
+    error: {
+      type: 'upstream_error',
+      message: `所有 API Key 均不可用。最后错误: ${lastError || '未知错误'}`,
+    },
+  });
+}
+
 // ─── models 聚合（并发查询所有上游，去重合并） ───
 
 async function handleModels(req, res) {
@@ -307,6 +360,8 @@ function handleRequest(req, res) {
     try {
       if (pathname === '/v1/chat/completions' && req.method === 'POST') {
         await handleChatCompletions(req, res, body);
+      } else if (pathname === '/v1/messages' && req.method === 'POST') {
+        await handleMessages(req, res, body);
       } else if (pathname === '/v1/embeddings' && req.method === 'POST') {
         await handleEmbeddings(req, res, body);
       } else if (pathname === '/v1/models' && req.method === 'GET') {
