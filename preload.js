@@ -14,4 +14,12 @@ contextBridge.exposeInMainWorld('api', {
     query: (id) => ipcRenderer.invoke('keys:query', id),
     queryAll: () => ipcRenderer.invoke('keys:queryAll'),
   },
+  server: {
+    start: (port) => ipcRenderer.invoke('server:start', port),
+    stop: () => ipcRenderer.invoke('server:stop'),
+    status: () => ipcRenderer.invoke('server:status'),
+    getUnifiedKey: () => ipcRenderer.invoke('server:getUnifiedKey'),
+    regenerateKey: () => ipcRenderer.invoke('server:regenerateKey'),
+    getPort: () => ipcRenderer.invoke('server:getPort'),
+  },
 });

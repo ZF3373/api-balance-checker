@@ -18,6 +18,33 @@
     </div>
   </header>
 
+  <!-- 聚合代理控制区 -->
+  <section class="proxy-bar">
+    <div class="proxy-status">
+      <span id="proxy-dot" class="status-dot stopped"></span>
+      <span id="proxy-status-text">代理未启动</span>
+    </div>
+    <div class="proxy-config">
+      <label>端口</label>
+      <input type="number" id="proxy-port" value="9527" min="1" max="65535" class="port-input" />
+      <button id="proxy-toggle" class="btn btn-primary btn-sm">启动代理</button>
+    </div>
+    <div id="proxy-info" class="proxy-info hidden">
+      <div class="key-display">
+        <label>统一 API Key</label>
+        <div class="key-row">
+          <input type="text" id="unified-key" readonly />
+          <button id="copy-key" class="btn btn-sm" title="复制">📋</button>
+          <button id="regen-key" class="btn btn-sm" title="重新生成">🔄</button>
+        </div>
+      </div>
+      <div class="endpoint-display">
+        <label>端点地址</label>
+        <code id="proxy-endpoint">http://127.0.0.1:9527/v1</code>
+      </div>
+    </div>
+  </section>
+
   <main class="content">
     <div id="empty-state" class="empty-state">
       <div class="empty-icon">📋</div>

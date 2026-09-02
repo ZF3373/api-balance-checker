@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const store = require('./store');
 const { PROVIDERS, PROVIDER_LIST } = require('./providers');
+const proxy = require('./proxy');
 
 let mainWindow = null;
 
@@ -39,7 +40,12 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  proxy.stopServer();
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  proxy.stopServer();
 });
 
 // ────────────────────── IPC 处理 ──────────────────────
@@ -121,3 +127,29 @@ ipcMain.handle('keys:queryAll', async () => {
   );
   return store.getAllKeys();
 });
+
+// ────────────────────── 聚合代理服务器 ──────────────────────
+
+ipcMain.handle('server:start', async (_e, port) => {
+  const usePort = port || store.getProxyPort();
+  try {
+    await proxy.startServer(usePort);
+    store.setProxyPort(usePort);
+    return { ok: true, ...proxy.getServerStatus() };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('server:stop', async () => {
+  await proxy.stopServer();
+  return { ok: true, ...proxy.getServerStatus() };
+});
+
+ipcMain.handle('server:status', () => proxy.getServerStatus());
+
+ipcMain.handle('server:getUnifiedKey', () => store.getUnifiedKey());
+
+ipcMain.handle('server:regenerateKey', () => store.regenerateUnifiedKey());
+
+ipcMain.handle('server:getPort', () => store.getProxyPort());

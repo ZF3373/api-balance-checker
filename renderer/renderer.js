@@ -5,6 +5,7 @@ let providers = [];
 let keys = [];
 let editingId = null;
 let queryingIds = new Set();
+let proxyRunning = false;
 
 // ─── DOM ───
 const $ = (id) => document.getElementById(id);
@@ -22,7 +23,71 @@ async function init() {
   providers = await window.api.providers.list();
   renderProviderOptions();
   await refreshKeys();
+  await initProxy();
   bindEvents();
+}
+
+// ─── 代理初始化 ───
+async function initProxy() {
+  const port = await window.api.server.getPort();
+  $('proxy-port').value = port;
+  const status = await window.api.server.status();
+  proxyRunning = status.running;
+  if (status.running) {
+    const key = await window.api.server.getUnifiedKey();
+    updateProxyUI(true, status.port, key);
+  } else {
+    updateProxyUI(false, port, null);
+  }
+}
+
+function updateProxyUI(running, port, key) {
+  proxyRunning = running;
+  const dot = $('proxy-dot');
+  const text = $('proxy-status-text');
+  const toggle = $('proxy-toggle');
+  const info = $('proxy-info');
+  const portInput = $('proxy-port');
+
+  if (running) {
+    dot.className = 'status-dot running';
+    text.textContent = `代理运行中 · 端口 ${port}`;
+    toggle.textContent = '停止代理';
+    toggle.classList.remove('btn-primary');
+    toggle.classList.add('btn-danger');
+    info.classList.remove('hidden');
+    portInput.disabled = true;
+    $('proxy-endpoint').textContent = `http://127.0.0.1:${port}/v1`;
+    if (key) $('unified-key').value = key;
+  } else {
+    dot.className = 'status-dot stopped';
+    text.textContent = '代理未启动';
+    toggle.textContent = '启动代理';
+    toggle.classList.add('btn-primary');
+    toggle.classList.remove('btn-danger');
+    info.classList.add('hidden');
+    portInput.disabled = false;
+  }
+}
+
+async function toggleProxy() {
+  const toggle = $('proxy-toggle');
+  toggle.disabled = true;
+  if (proxyRunning) {
+    await window.api.server.stop();
+    updateProxyUI(false, null, null);
+  } else {
+    const port = parseInt($('proxy-port').value, 10) || 9527;
+    const result = await window.api.server.start(port);
+    if (!result.ok) {
+      alert('启动失败: ' + (result.error || '端口可能被占用'));
+      updateProxyUI(false, port, null);
+    } else {
+      const key = await window.api.server.getUnifiedKey();
+      updateProxyUI(true, result.port, key);
+    }
+  }
+  toggle.disabled = false;
 }
 
 function renderProviderOptions() {
@@ -47,9 +112,35 @@ function bindEvents() {
   providerSelect.addEventListener('change', onProviderChange);
   form.addEventListener('submit', onSave);
 
+  // 代理事件
+  $('proxy-toggle').addEventListener('click', toggleProxy);
+  $('copy-key').addEventListener('click', copyUnifiedKey);
+  $('regen-key').addEventListener('click', regenUnifiedKey);
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
   });
+}
+
+async function copyUnifiedKey() {
+  const key = $('unified-key').value;
+  if (!key) return;
+  try {
+    await navigator.clipboard.writeText(key);
+    const btn = $('copy-key');
+    const orig = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(() => (btn.textContent = orig), 1500);
+  } catch {
+    $('unified-key').select();
+    document.execCommand('copy');
+  }
+}
+
+async function regenUnifiedKey() {
+  if (!confirm('重新生成统一 Key 后，旧的 Key 将失效，所有使用旧 Key 的客户端需要更新。确认？')) return;
+  const newKey = await window.api.server.regenerateKey();
+  $('unified-key').value = newKey;
 }
 
 function onProviderChange() {

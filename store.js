@@ -17,7 +17,18 @@ function init(userDataDir) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
   if (!fs.existsSync(storePath)) {
-    save({ keys: [] });
+    save({ keys: [], settings: {} });
+  }
+  // 确保有 unifiedKey
+  const data = load();
+  if (!data.settings) data.settings = {};
+  if (!data.settings.unifiedKey) {
+    data.settings.unifiedKey = 'sk-' + crypto.randomBytes(16).toString('hex');
+    save(data);
+  }
+  if (!data.settings.proxyPort) {
+    data.settings.proxyPort = 9527;
+    save(data);
   }
 }
 
@@ -26,9 +37,10 @@ function load() {
     const raw = fs.readFileSync(storePath, 'utf-8');
     const data = JSON.parse(raw);
     if (!Array.isArray(data.keys)) data.keys = [];
+    if (!data.settings || typeof data.settings !== 'object') data.settings = {};
     return data;
   } catch {
-    return { keys: [] };
+    return { keys: [], settings: {} };
   }
 }
 
@@ -97,6 +109,38 @@ function setQueryResult(id, result) {
   });
 }
 
+// ─── Settings ───
+
+function getSettings() {
+  return load().settings;
+}
+
+function saveSettings(patch) {
+  const data = load();
+  Object.assign(data.settings, patch);
+  save(data);
+  return data.settings;
+}
+
+function getUnifiedKey() {
+  return load().settings.unifiedKey;
+}
+
+function regenerateUnifiedKey() {
+  const newKey = 'sk-' + crypto.randomBytes(16).toString('hex');
+  saveSettings({ unifiedKey: newKey });
+  return newKey;
+}
+
+function getProxyPort() {
+  return load().settings.proxyPort || 9527;
+}
+
+function setProxyPort(port) {
+  saveSettings({ proxyPort: port });
+  return port;
+}
+
 module.exports = {
   init,
   getAllKeys,
@@ -105,4 +149,10 @@ module.exports = {
   updateKey,
   deleteKey,
   setQueryResult,
+  getSettings,
+  saveSettings,
+  getUnifiedKey,
+  regenerateUnifiedKey,
+  getProxyPort,
+  setProxyPort,
 };
