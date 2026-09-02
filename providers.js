@@ -61,10 +61,109 @@ async function tryJson(res) {
   }
 }
 
+/**
+ * 规范化 baseUrl：去除尾部斜杠和多余的 /v1 后缀，
+ * 使多策略余额查询可以直接拼接 /v1/... 路径
+ */
+function normalizeBaseUrl(baseUrl) {
+  return baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+}
+
+/**
+ * OpenAI 兼容平台的多策略余额查询（供中转站等接口未知的平台使用）。
+ * 依次尝试已知的余额查询接口，命中即返回。
+ */
+async function queryCompatibleBalance(baseUrl, apiKey) {
+  const headers = { Authorization: `Bearer ${apiKey}` };
+  const root = normalizeBaseUrl(baseUrl);
+
+  // 策略一：credit_grants 直接返回可用额度（One-API / New-API 等）
+  try {
+    const res = await fetchWithTimeout(`${root}/v1/dashboard/billing/credit_grants`, { headers });
+    if (res.ok) {
+      const json = await tryJson(res);
+      if (json) {
+        if (json.total_available != null) {
+          return { balance: parseFloat(json.total_available), currency: 'USD', raw: json };
+        }
+        if (json.total_granted != null && json.total_used != null) {
+          return { balance: parseFloat(json.total_granted) - parseFloat(json.total_used), currency: 'USD', raw: json };
+        }
+      }
+    }
+  } catch { /* 继续下一个策略 */ }
+
+  // 策略二：subscription + usage 计算剩余额度（OpenAI 原生风格）
+  try {
+    const subRes = await fetchWithTimeout(`${root}/v1/dashboard/billing/subscription`, { headers });
+    if (subRes.ok) {
+      const sub = await tryJson(subRes);
+      if (sub) {
+        const hardLimit = parseFloat(sub.hard_limit ?? 0);
+        const now = new Date();
+        const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        const end = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const usageRes = await fetchWithTimeout(
+          `${root}/v1/dashboard/billing/usage?start_date=${start}&end_date=${end}`,
+          { headers },
+        );
+        if (usageRes.ok) {
+          const usage = await tryJson(usageRes);
+          if (usage) {
+            const used = parseFloat(usage.total_usage ?? 0) / 100; // 分 → 元
+            return { balance: hardLimit - used, currency: 'USD', raw: { subscription: sub, usage } };
+          }
+        }
+      }
+    }
+  } catch { /* 继续下一个策略 */ }
+
+  // 策略三：users/me/balance（月之暗面 / Moonshot 风格）
+  try {
+    const res = await fetchWithTimeout(`${root}/v1/users/me/balance`, { headers });
+    if (res.ok) {
+      const json = await tryJson(res);
+      if (json) {
+        const d = json.data || json;
+        if (d.available_balance != null) {
+          return { balance: parseFloat(d.available_balance), currency: 'CNY', raw: json };
+        }
+        if (d.balance != null) {
+          return { balance: parseFloat(d.balance), currency: 'CNY', raw: json };
+        }
+      }
+    }
+  } catch { /* 继续下一个策略 */ }
+
+  // 策略四：user/info（硅基流动风格）
+  try {
+    const res = await fetchWithTimeout(`${root}/v1/user/info`, { headers });
+    if (res.ok) {
+      const json = await tryJson(res);
+      if (json) {
+        const d = json.data || json;
+        if (d.balance != null) {
+          return { balance: parseFloat(d.balance), currency: 'CNY', raw: json };
+        }
+      }
+    }
+  } catch { /* 继续下一个策略 */ }
+
+  throw new Error('该平台不支持余额查询接口，请尝试「自定义」类型');
+}
+
+/**
+ * 用于已知没有公开余额查询 API 的国内平台。
+ * 余额查询会直接返回提示，不影响 API Key 聚合代理功能。
+ */
+async function unsupportedBalance(providerName) {
+  throw new Error(`${providerName} 暂不支持余额查询（不影响 API 聚合代理）`);
+}
+
 // ────────────────────── 提供商定义 ──────────────────────
 
 const PROVIDERS = {
-  // DeepSeek 官方
+  // DeepSeek 官方 — 余额接口：GET /user/balance
   deepseek: {
     name: 'DeepSeek',
     defaultBaseUrl: 'https://api.deepseek.com',
@@ -85,7 +184,71 @@ const PROVIDERS = {
     },
   },
 
-  // OpenRouter
+  // 智谱 GLM — 余额接口：GET /api/billing/v1/current-balance（需 JWT 鉴权）
+  zhipu: {
+    name: '智谱',
+    defaultBaseUrl: 'https://open.bigmodel.cn',
+    currency: 'CNY',
+    async queryBalance(baseUrl, apiKey) {
+      const token = generateZhipuJWT(apiKey);
+      const res = await fetchWithTimeout(`${baseUrl}/api/billing/v1/current-balance`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await tryJson(res);
+      if (!json) throw new Error('响应非 JSON');
+      const d = json.data || json;
+      return {
+        balance: parseFloat(d.balance ?? '0'),
+        currency: 'CNY',
+        raw: json,
+      };
+    },
+  },
+
+  // 硅基流动 SiliconFlow — 余额接口：GET /v1/user/info
+  siliconflow: {
+    name: '硅基流动',
+    defaultBaseUrl: 'https://api.siliconflow.cn',
+    currency: 'CNY',
+    async queryBalance(baseUrl, apiKey) {
+      const res = await fetchWithTimeout(`${baseUrl}/v1/user/info`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await tryJson(res);
+      if (!json) throw new Error('响应非 JSON');
+      const d = json.data || {};
+      return {
+        balance: parseFloat(d.balance ?? '0'),
+        currency: 'CNY',
+        raw: json,
+      };
+    },
+  },
+
+  // 月之暗面 Moonshot / Kimi — 余额接口：GET /v1/users/me/balance
+  moonshot: {
+    name: '月之暗面 (Kimi)',
+    defaultBaseUrl: 'https://api.moonshot.cn',
+    currency: 'CNY',
+    async queryBalance(baseUrl, apiKey) {
+      const res = await fetchWithTimeout(`${baseUrl}/v1/users/me/balance`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await tryJson(res);
+      if (!json) throw new Error('响应非 JSON');
+      const d = json.data || json;
+      return {
+        balance: parseFloat(d.available_balance ?? d.balance ?? '0'),
+        currency: 'CNY',
+        raw: json,
+      };
+    },
+  },
+
+  // OpenRouter — 余额接口：GET /api/v1/auth/key
   openrouter: {
     name: 'OpenRouter',
     defaultBaseUrl: 'https://openrouter.ai',
@@ -108,99 +271,96 @@ const PROVIDERS = {
     },
   },
 
-  // 硅基流动 SiliconFlow
-  siliconflow: {
-    name: '硅基流动',
-    defaultBaseUrl: 'https://api.siliconflow.cn',
+  // ── 以下国内平台暂无公开的余额查询 API，仅用于 API Key 聚合代理 ──
+  // 余额查询会返回提示，不影响代理转发功能。
+
+  // MiniMax
+  minimax: {
+    name: 'MiniMax',
+    defaultBaseUrl: 'https://api.minimax.chat',
     currency: 'CNY',
-    async queryBalance(baseUrl, apiKey) {
-      const res = await fetchWithTimeout(`${baseUrl}/v1/user/info`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await tryJson(res);
-      if (!json) throw new Error('响应非 JSON');
-      const d = json.data || {};
-      return {
-        balance: parseFloat(d.balance ?? '0'),
-        currency: 'CNY',
-        raw: json,
-      };
+    async queryBalance() {
+      return unsupportedBalance('MiniMax');
     },
   },
 
-  // 智谱 GLM
-  zhipu: {
-    name: '智谱',
-    defaultBaseUrl: 'https://open.bigmodel.cn',
+  // 零一万物 01.AI
+  lingyiwanwu: {
+    name: '零一万物',
+    defaultBaseUrl: 'https://api.lingyiwanwu.com',
     currency: 'CNY',
-    async queryBalance(baseUrl, apiKey) {
-      const token = generateZhipuJWT(apiKey);
-      const res = await fetchWithTimeout(`${baseUrl}/api/billing/v1/current-balance`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await tryJson(res);
-      if (!json) throw new Error('响应非 JSON');
-      const d = json.data || json;
-      return {
-        balance: parseFloat(d.balance ?? '0'),
-        currency: 'CNY',
-        raw: json,
-      };
+    async queryBalance() {
+      return unsupportedBalance('零一万物');
     },
   },
 
-  // OpenAI 兼容中转站（One-API / New-API 等）
+  // 百川智能 Baichuan
+  baichuan: {
+    name: '百川智能',
+    defaultBaseUrl: 'https://api.baichuan-ai.com',
+    currency: 'CNY',
+    async queryBalance() {
+      return unsupportedBalance('百川智能');
+    },
+  },
+
+  // 阿里云百炼 / 通义千问 DashScope
+  dashscope: {
+    name: '阿里云百炼 (通义千问)',
+    defaultBaseUrl: 'https://dashscope.aliyuncs.com',
+    currency: 'CNY',
+    async queryBalance() {
+      return unsupportedBalance('阿里云百炼');
+    },
+  },
+
+  // 火山引擎 / 豆包 Volcengine Ark
+  volcengine: {
+    name: '火山引擎 (豆包)',
+    defaultBaseUrl: 'https://ark.cn-beijing.volces.com',
+    currency: 'CNY',
+    async queryBalance() {
+      return unsupportedBalance('火山引擎');
+    },
+  },
+
+  // 百度千帆 / 文心一言 Baidu Qianfan
+  qianfan: {
+    name: '百度千帆 (文心一言)',
+    defaultBaseUrl: 'https://qianfan.baidubce.com',
+    currency: 'CNY',
+    async queryBalance() {
+      return unsupportedBalance('百度千帆');
+    },
+  },
+
+  // 腾讯混元 Tencent Hunyuan
+  hunyuan: {
+    name: '腾讯混元',
+    defaultBaseUrl: 'https://api.hunyuan.cloud.tencent.com',
+    currency: 'CNY',
+    async queryBalance() {
+      return unsupportedBalance('腾讯混元');
+    },
+  },
+
+  // 基元律动 TokenRhythm
+  tokenrhythm: {
+    name: '基元律动',
+    defaultBaseUrl: 'https://tokenrhythm.studio',
+    currency: 'CNY',
+    async queryBalance() {
+      return unsupportedBalance('基元律动');
+    },
+  },
+
+  // OpenAI 兼容中转站（One-API / New-API 等）— 接口未知，多策略自动探测
   relay: {
     name: '中转站(OpenAI兼容)',
     defaultBaseUrl: '',
     currency: 'USD',
     async queryBalance(baseUrl, apiKey) {
-      const headers = { Authorization: `Bearer ${apiKey}` };
-
-      // 策略一：credit_grants 直接返回可用额度
-      try {
-        const res = await fetchWithTimeout(`${baseUrl}/v1/dashboard/billing/credit_grants`, { headers });
-        if (res.ok) {
-          const json = await tryJson(res);
-          if (json) {
-            if (json.total_available != null) {
-              return { balance: parseFloat(json.total_available), currency: 'USD', raw: json };
-            }
-            if (json.total_granted != null && json.total_used != null) {
-              return { balance: parseFloat(json.total_granted) - parseFloat(json.total_used), currency: 'USD', raw: json };
-            }
-          }
-        }
-      } catch { /* 继续下一个策略 */ }
-
-      // 策略二：subscription + usage 计算剩余额度
-      try {
-        const subRes = await fetchWithTimeout(`${baseUrl}/v1/dashboard/billing/subscription`, { headers });
-        if (subRes.ok) {
-          const sub = await tryJson(subRes);
-          if (sub) {
-            const hardLimit = parseFloat(sub.hard_limit ?? 0);
-            const now = new Date();
-            const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-            const end = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-            const usageRes = await fetchWithTimeout(
-              `${baseUrl}/v1/dashboard/billing/usage?start_date=${start}&end_date=${end}`,
-              { headers },
-            );
-            if (usageRes.ok) {
-              const usage = await tryJson(usageRes);
-              if (usage) {
-                const used = parseFloat(usage.total_usage ?? 0) / 100; // 分 → 元
-                return { balance: hardLimit - used, currency: 'USD', raw: { subscription: sub, usage } };
-              }
-            }
-          }
-        }
-      } catch { /* 继续抛错 */ }
-
-      throw new Error('中转站不支持余额查询接口，请尝试「自定义」类型');
+      return queryCompatibleBalance(baseUrl, apiKey);
     },
   },
 
