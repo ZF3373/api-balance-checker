@@ -6,6 +6,7 @@ let keys = [];
 let editingId = null;
 let queryingIds = new Set();
 let busyIds = new Set();
+let visibleKeyIds = new Set();
 let proxyRunning = false;
 
 // ─── DOM ───
@@ -363,6 +364,26 @@ function renderList() {
       openModal(item);
     });
     card.querySelector('.btn-del').addEventListener('click', () => deleteOne(k.id));
+    // Key 显示/隐藏 + 复制
+    const toggleBtn = card.querySelector('.btn-key-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        if (visibleKeyIds.has(k.id)) visibleKeyIds.delete(k.id);
+        else visibleKeyIds.add(k.id);
+        renderList();
+      });
+    }
+    const copyBtn = card.querySelector('.btn-key-copy');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(k.apiKey);
+          showToast('Key 已复制', 'success', 1500);
+        } catch {
+          showToast('复制失败', 'error', 1500);
+        }
+      });
+    }
   });
 }
 
@@ -395,6 +416,8 @@ function renderCard(k) {
     : '';
 
   const maskedKey = maskKey(k.apiKey);
+  const isKeyVisible = visibleKeyIds.has(k.id);
+  const displayKey = isKeyVisible ? k.apiKey : maskedKey;
 
   // 连接状态指示
   let testIndicator = '';
@@ -426,7 +449,12 @@ function renderCard(k) {
           <span class="provider-tag">${escapeHtml(providerName)}</span>
           ${badgeHtml}
         </div>
-        <div class="key-meta">${escapeHtml(maskedKey)}${k.baseUrl ? ' · ' + escapeHtml(k.baseUrl) : ''}${testIndicator}</div>
+        <div class="key-meta">
+          <span class="key-text" title="${isKeyVisible ? '' : '点击眼睛查看完整 Key'}">${escapeHtml(displayKey)}</span>
+          <button class="btn-key-toggle" data-id="${k.id}" title="${isKeyVisible ? '隐藏' : '显示'} Key">${isKeyVisible ? '🙈' : '👁'}</button>
+          <button class="btn-key-copy" data-id="${k.id}" title="复制 Key">📋</button>
+          ${k.baseUrl ? ' · ' + escapeHtml(k.baseUrl) : ''}${testIndicator}
+        </div>
         <div class="key-balance">${balanceHtml}</div>
         ${timeStr ? `<div class="balance-time">${timeStr}</div>` : ''}
       </div>

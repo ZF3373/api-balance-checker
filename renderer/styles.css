@@ -565,6 +565,31 @@ body {
   align-items: center;
 }
 
+/* ─── Key 显示/隐藏/复制 ─── */
+.key-meta .key-text {
+  font-family: var(--font-mono, monospace);
+}
+
+.btn-key-toggle,
+.btn-key-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  opacity: 0.5;
+  transition: opacity var(--t);
+  vertical-align: middle;
+}
+
+.btn-key-toggle:hover,
+.btn-key-copy:hover {
+  opacity: 1;
+}
+
 /* ─── 模型列表 + 连接状态 ─── */
 .key-card.has-models {
   grid-template-rows: auto auto;
