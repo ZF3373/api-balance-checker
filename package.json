@@ -1,7 +1,7 @@
 {
-  "name": "api-balance-checker",
+  "name": "keyhub",
   "version": "1.0.0",
-  "description": "个人自用 API Key 聚合管理 + 余额查询桌面工具",
+  "description": "API Key 聚合代理 + 余额查询桌面工具",
   "main": "main.js",
   "author": "ZF3373",
   "license": "MIT",
@@ -20,8 +20,8 @@
     "electron-builder": "^26.0.0"
   },
   "build": {
-    "appId": "com.zf3373.api-balance-checker",
-    "productName": "API余额查询",
+    "appId": "com.zf3373.keyhub",
+    "productName": "KeyHub",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -39,7 +39,7 @@
     "win": {
       "target": ["nsis"],
       "icon": "build/icon.svg",
-      "artifactName": "api-balance-checker-setup-${version}.${ext}"
+      "artifactName": "KeyHub-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": true,
@@ -48,7 +48,7 @@
       "createStartMenuShortcut": true,
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
-      "artifactName": "api-balance-checker-setup-${version}.${ext}"
+      "artifactName": "KeyHub-Setup-${version}.${ext}"
     },
     "publish": {
       "provider": "github",

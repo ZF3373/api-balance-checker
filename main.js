@@ -22,7 +22,7 @@ function createWindow() {
     height: 720,
     minWidth: 860,
     minHeight: 560,
-    title: 'API 余额查询',
+    title: 'KeyHub · API Key 聚合 & 余额查询',
     backgroundColor: '#0f1014',
     show: false,
     icon: path.join(__dirname, 'build', 'icon.svg'),
@@ -46,7 +46,7 @@ function createWindow() {
   });
 }
 
-app.setAppUserModelId('com.zf3373.api-balance-checker');
+app.setAppUserModelId('com.zf3373.keyhub');
 
 app.whenReady().then(async () => {
   // 跳过证书验证，确保能正常访问 GitHub API 和下载安装包
@@ -209,7 +209,7 @@ async function fetchLatestNightly() {
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'api-balance-checker-updater', Accept: 'application/vnd.github+json' },
+      headers: { 'User-Agent': 'keyhub-updater', Accept: 'application/vnd.github+json' },
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`);
@@ -244,14 +244,14 @@ async function fetchLatestNightly() {
 function downloadInstaller(assetUrl, totalSize) {
   return new Promise(async (resolve, reject) => {
     const tmpDir = os.tmpdir();
-    const fileName = `api-balance-checker-update-${Date.now()}.exe`;
+    const fileName = `keyhub-update-${Date.now()}.exe`;
     const filePath = path.join(tmpDir, fileName);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 300000); // 5 分钟超时
 
     try {
       const res = await fetch(assetUrl, {
-        headers: { 'User-Agent': 'api-balance-checker-updater' },
+        headers: { 'User-Agent': 'keyhub-updater' },
         signal: controller.signal,
         redirect: 'follow',
       });

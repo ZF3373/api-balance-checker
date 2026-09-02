@@ -1,12 +1,20 @@
-# API Key 余额查询 + 聚合代理（桌面工具）
+# KeyHub — API Key 聚合代理 + 余额查询
 
-个人自用的 API Key 聚合管理 + 余额查询 + 聚合代理桌面软件，基于 Electron。
+个人自用的 API Key 聚合代理 + 余额查询桌面软件，基于 Electron。
 
-参考 GitHub [freellmapi](https://github.com/tashfeenahmed/freellmapi) 项目思路，聚焦于「管理多个 API Key + 查询余额 + 聚合成统一端点」这三个核心需求，不做多余功能。
+将多个 API Key 聚合成一个统一端点 + 一个统一 Key，客户端只需配置一次即可访问所有上游；同时支持查询各平台余额，一目了然。
 
 ## 功能
 
-### 1. Key 管理 + 余额查询
+### 1. 聚合代理（核心功能）
+- 将所有已配置的 API Key 聚合成**一个统一端点 + 一个统一 Key**
+- 客户端只需配置统一端点地址和统一 Key，即可访问所有上游 Key
+- **顺序优先 + 故障转移**：按列表顺序依次尝试，某个 Key 失败自动切换到下一个
+- 支持流式响应（SSE），兼容 ChatBox、NextChat、OpenAI SDK 等客户端
+- 统一 Key 自动生成，可复制、可重新生成
+- 支持端点：`/v1/chat/completions`、`/v1/messages`、`/v1/embeddings`、`/v1/models`
+
+### 2. Key 管理 + 余额查询
 - 添加 / 编辑 / 删除多个 API Key 配置
 - 单个查询或一键刷新全部余额
 - 本地存储，不上传任何服务器
@@ -15,14 +23,6 @@
   - **仅用于 API 聚合代理（暂无公开余额 API）**：MiniMax、零一万物、百川智能、阿里云百炼 (通义千问)、火山引擎 (豆包)、百度千帆 (文心一言)、腾讯混元、基元律动
   - **通用/自定义**：中转站（OpenAI 兼容，多策略自动探测）、自定义（手动填写接口路径）
 - 无论是否支持余额查询，所有平台均可正常用于 API Key 聚合代理，余额查询失败不影响代理功能
-
-### 2. 聚合代理（核心功能）
-- 将所有已配置的 API Key 聚合成**一个统一端点 + 一个统一 Key**
-- 客户端只需配置统一端点地址和统一 Key，即可访问所有上游 Key
-- **顺序优先 + 故障转移**：按列表顺序依次尝试，某个 Key 失败自动切换到下一个
-- 支持流式响应（SSE），兼容 ChatBox、NextChat、OpenAI SDK 等客户端
-- 统一 Key 自动生成，可复制、可重新生成
-- 支持端点：`/v1/chat/completions`、`/v1/embeddings`、`/v1/models`
 
 ### 3. 自动更新
 - 应用内一键检查更新（顶栏 🔄 按钮）
@@ -52,12 +52,6 @@ npm run dist    # 生成 dist/ 目录下的安装包
 ```
 
 ## 使用说明
-
-### 余额查询
-
-1. 点击「+ 添加 Key」
-2. 填写名称、选择类型、填入 Base URL（留空用默认）和 API Key
-3. 保存后点「查询」查看单个余额，或「刷新全部」批量查询
 
 ### 聚合代理
 
@@ -101,6 +95,12 @@ curl http://127.0.0.1:9527/v1/messages \
 
 > 注意：两种协议的流式响应格式不同（OpenAI 用 `choices[0].delta.content`，Anthropic 用原生 Messages 事件），不要混用解析器。
 
+### 余额查询
+
+1. 点击「+ 添加 Key」
+2. 填写名称、选择类型、填入 Base URL（留空用默认）和 API Key
+3. 保存后点「查询」查看单个余额，或「刷新全部」批量查询
+
 ### 检查更新
 
 - 点击顶栏 🔄 按钮检查更新
@@ -139,11 +139,11 @@ api-balance-checker/
 
 Key 配置和设置保存在 Electron 的 userData 目录下 `keys.json`：
 
-- Windows: `C:\Users\<用户名>\AppData\Roaming\api-balance-checker\keys.json`
+- Windows: `C:\Users\<用户名>\AppData\Roaming\KeyHub\keys.json`
 
 ## 说明
 
 - 代理服务器仅监听 `127.0.0.1`，不对外暴露
 - API Key 明文存储于本地文件，请勿在公共设备使用
 - nightly 版本每次 commit 自动构建，版本号格式 `1.0.0-nightly.YYYYMMDD.sha7`
-- 自动更新从 GitHub Releases 拉取，仅打包后的安装版支持（源码运行不支持）
+- 自动更新通过 GitHub API 查询最新 nightly release 并直接下载安装包
