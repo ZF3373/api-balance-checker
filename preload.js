@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('api', {
     remove: (id) => ipcRenderer.invoke('keys:delete', id),
     query: (id) => ipcRenderer.invoke('keys:query', id),
     queryAll: () => ipcRenderer.invoke('keys:queryAll'),
+    models: (id) => ipcRenderer.invoke('keys:models', id),
+    test: (id) => ipcRenderer.invoke('keys:test', id),
   },
   server: {
     start: (port) => ipcRenderer.invoke('server:start', port),

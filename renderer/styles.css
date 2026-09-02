@@ -565,6 +565,44 @@ body {
   align-items: center;
 }
 
+/* ─── 模型列表 + 连接状态 ─── */
+.key-card.has-models {
+  grid-template-rows: auto auto;
+}
+
+.key-models {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.models-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.models-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.model-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: var(--font-mono, monospace);
+}
+
+.test-ok { color: var(--success); }
+.test-err { color: var(--error); }
+
 /* ─── 状态徽章 ─── */
 .badge {
   display: inline-block;

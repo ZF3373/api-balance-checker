@@ -157,6 +157,103 @@ ipcMain.handle('keys:queryAll', async () => {
   return store.getAllKeys();
 });
 
+// ─── 获取可用模型 + 连接测试 ───
+
+/**
+ * 规范化 baseUrl：去除尾部斜杠和多余的 /v1 后缀
+ */
+function normalizeBaseUrl(baseUrl) {
+  return baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+}
+
+/**
+ * 向上游 GET /v1/models 发起请求（不消耗 token）
+ */
+async function fetchUpstreamModels(baseUrl, apiKey, timeoutMs = 15000) {
+  const root = normalizeBaseUrl(baseUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${root}/v1/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 获取可用模型列表
+ipcMain.handle('keys:models', async (_e, id) => {
+  const item = store.getKey(id);
+  if (!item) return { error: 'Key 不存在' };
+
+  const provider = PROVIDERS[item.provider];
+  if (!provider) return { error: `未知提供商: ${item.provider}` };
+
+  const baseUrl = item.baseUrl || provider.defaultBaseUrl;
+  if (!baseUrl) return { error: '缺少 baseUrl' };
+
+  try {
+    const res = await fetchUpstreamModels(baseUrl, item.apiKey);
+    if (!res.ok) {
+      const msg = `HTTP ${res.status}`;
+      store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: new Date().toISOString() });
+      return { error: msg };
+    }
+    const json = await res.json();
+    const models = (json.data || []).map((m) => m.id).filter(Boolean).sort();
+    const now = new Date().toISOString();
+    store.updateKey(id, {
+      lastModels: models,
+      lastModelsTime: now,
+      lastTestStatus: 'ok',
+      lastTestError: null,
+      lastTestTime: now,
+    });
+    return { ok: true, models };
+  } catch (err) {
+    const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
+    store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: new Date().toISOString() });
+    return { error: msg };
+  }
+});
+
+// 连接测试（GET /v1/models，不消耗 token）
+ipcMain.handle('keys:test', async (_e, id) => {
+  const item = store.getKey(id);
+  if (!item) return { error: 'Key 不存在' };
+
+  const provider = PROVIDERS[item.provider];
+  if (!provider) return { error: `未知提供商: ${item.provider}` };
+
+  const baseUrl = item.baseUrl || provider.defaultBaseUrl;
+  if (!baseUrl) return { error: '缺少 baseUrl' };
+
+  try {
+    const res = await fetchUpstreamModels(baseUrl, item.apiKey, 10000);
+    const now = new Date().toISOString();
+    if (res.ok) {
+      let modelCount = 0;
+      try {
+        const json = await res.json();
+        modelCount = (json.data || []).length;
+      } catch { /* 非 JSON 也算连接正常 */ }
+      store.updateKey(id, { lastTestStatus: 'ok', lastTestError: null, lastTestTime: now });
+      return { ok: true, modelCount };
+    } else {
+      const msg = `HTTP ${res.status}`;
+      store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: now });
+      return { ok: false, error: msg };
+    }
+  } catch (err) {
+    const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
+    store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: new Date().toISOString() });
+    return { ok: false, error: msg };
+  }
+});
+
 // ────────────────────── 聚合代理服务器 ──────────────────────
 
 ipcMain.handle('server:start', async (_e, port) => {

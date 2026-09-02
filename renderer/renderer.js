@@ -5,6 +5,7 @@ let providers = [];
 let keys = [];
 let editingId = null;
 let queryingIds = new Set();
+let busyIds = new Set();
 let proxyRunning = false;
 
 // ─── DOM ───
@@ -355,6 +356,8 @@ function renderList() {
     const card = document.querySelector(`[data-id="${k.id}"]`);
     if (!card) return;
     card.querySelector('.btn-query').addEventListener('click', () => queryOne(k.id));
+    card.querySelector('.btn-models').addEventListener('click', () => fetchModels(k.id));
+    card.querySelector('.btn-test').addEventListener('click', () => testConnection(k.id));
     card.querySelector('.btn-edit').addEventListener('click', () => {
       const item = keys.find((x) => x.id === k.id);
       openModal(item);
@@ -367,6 +370,7 @@ function renderCard(k) {
   const provider = providers.find((p) => p.key === k.provider);
   const providerName = provider ? provider.name : k.provider;
   const isQuerying = queryingIds.has(k.id);
+  const isBusy = busyIds.has(k.id);
 
   let balanceHtml;
   let badgeHtml;
@@ -392,23 +396,48 @@ function renderCard(k) {
 
   const maskedKey = maskKey(k.apiKey);
 
+  // 连接状态指示
+  let testIndicator = '';
+  if (k.lastTestStatus === 'ok') {
+    testIndicator = ` · <span class="test-ok">连接正常</span>`;
+  } else if (k.lastTestStatus === 'error') {
+    testIndicator = ` · <span class="test-err" title="${escapeHtml(k.lastTestError || '')}">连接异常</span>`;
+  }
+
+  // 模型列表展开区
+  let modelsHtml = '';
+  if (k.lastModels && k.lastModels.length > 0) {
+    const modelsTime = k.lastModelsTime ? ` · ${formatTime(k.lastModelsTime)}` : '';
+    modelsHtml = `
+      <div class="key-models">
+        <span class="models-label">可用模型 (${k.lastModels.length})${modelsTime}</span>
+        <div class="models-list">
+          ${k.lastModels.map((m) => `<span class="model-chip">${escapeHtml(m)}</span>`).join('')}
+        </div>
+      </div>
+    `;
+  }
+
   return `
-    <div class="key-card" data-id="${k.id}">
+    <div class="key-card${modelsHtml ? ' has-models' : ''}" data-id="${k.id}">
       <div class="key-info">
         <div class="key-name">
           ${escapeHtml(k.name)}
           <span class="provider-tag">${escapeHtml(providerName)}</span>
           ${badgeHtml}
         </div>
-        <div class="key-meta">${escapeHtml(maskedKey)}${k.baseUrl ? ' · ' + escapeHtml(k.baseUrl) : ''}</div>
+        <div class="key-meta">${escapeHtml(maskedKey)}${k.baseUrl ? ' · ' + escapeHtml(k.baseUrl) : ''}${testIndicator}</div>
         <div class="key-balance">${balanceHtml}</div>
         ${timeStr ? `<div class="balance-time">${timeStr}</div>` : ''}
       </div>
       <div class="key-actions">
-        <button class="btn btn-sm btn-primary btn-query" ${isQuerying ? 'disabled' : ''} title="查询余额">查询</button>
+        <button class="btn btn-sm btn-primary btn-query" ${isQuerying || isBusy ? 'disabled' : ''} title="查询余额">查询</button>
+        <button class="btn btn-sm btn-icon btn-models" ${isBusy ? 'disabled' : ''} title="获取可用模型">${isBusy ? '<span class="spinner"></span>' : '🤖'}</button>
+        <button class="btn btn-sm btn-icon btn-test" ${isBusy ? 'disabled' : ''} title="测试连接">${isBusy ? '<span class="spinner"></span>' : '⚡'}</button>
         <button class="btn btn-sm btn-icon btn-edit" title="编辑">✎</button>
         <button class="btn btn-sm btn-icon btn-del" title="删除">🗑</button>
       </div>
+      ${modelsHtml}
     </div>
   `;
 }
@@ -420,6 +449,34 @@ async function queryOne(id) {
   await window.api.keys.query(id);
   queryingIds.delete(id);
   await refreshKeys();
+}
+
+// ─── 获取可用模型 ───
+async function fetchModels(id) {
+  busyIds.add(id);
+  renderList();
+  const result = await window.api.keys.models(id);
+  busyIds.delete(id);
+  await refreshKeys();
+  if (result.error) {
+    showToast('获取模型失败: ' + result.error, 'error');
+  } else {
+    showToast(`获取到 ${result.models.length} 个模型`, 'success', 1500);
+  }
+}
+
+// ─── 连接测试 ───
+async function testConnection(id) {
+  busyIds.add(id);
+  renderList();
+  const result = await window.api.keys.test(id);
+  busyIds.delete(id);
+  await refreshKeys();
+  if (result.ok) {
+    showToast('连接正常' + (result.modelCount ? ` · ${result.modelCount} 个模型` : ''), 'success', 1500);
+  } else {
+    showToast('连接异常: ' + (result.error || '未知错误'), 'error');
+  }
 }
 
 async function refreshAll() {
