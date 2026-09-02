@@ -75,8 +75,8 @@ jobs:
           # Upload assets with retry
           for i in 1 2 3; do
             gh release upload "$TAG" \
-              "dist/api-balance-checker-setup-${{ steps.version.outputs.version }}.exe" \
-              "dist/api-balance-checker-setup-${{ steps.version.outputs.version }}.exe.blockmap" \
+              "dist/KeyHub-Setup-${{ steps.version.outputs.version }}.exe" \
+              "dist/KeyHub-Setup-${{ steps.version.outputs.version }}.exe.blockmap" \
               "dist/latest.yml" \
               --clobber && break
             echo "Upload attempt $i failed, retrying in 10s..."
