@@ -405,9 +405,9 @@ function renderCard(k) {
         ${timeStr ? `<div class="balance-time">${timeStr}</div>` : ''}
       </div>
       <div class="key-actions">
-        <button class="btn btn-sm btn-primary btn-query" ${isQuerying ? 'disabled' : ''}>查询</button>
-        <button class="btn btn-sm btn-edit">编辑</button>
-        <button class="btn btn-sm btn-del">删除</button>
+        <button class="btn btn-sm btn-primary btn-query" ${isQuerying ? 'disabled' : ''} title="查询余额">查询</button>
+        <button class="btn btn-sm btn-icon btn-edit" title="编辑">✎</button>
+        <button class="btn btn-sm btn-icon btn-del" title="删除">🗑</button>
       </div>
     </div>
   `;
