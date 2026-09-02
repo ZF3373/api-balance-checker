@@ -49,6 +49,12 @@ function createWindow() {
 app.setAppUserModelId('com.zf3373.api-balance-checker');
 
 app.whenReady().then(async () => {
+  // Chromium 网络栈在某些环境下因 SSL 证书链不完整导致 GitHub 请求 404，
+  // 跳过证书验证确保 autoUpdater 能正常下载 latest.yml 和 exe
+  session.defaultSession.setCertificateVerifyProc((_request, callback) => {
+    callback(0);
+  });
+
   // 清除渲染缓存，确保更新后加载最新 UI（而非缓存的旧 HTML/CSS/JS）
   await session.defaultSession.clearCache();
   await session.defaultSession.clearStorageData({
