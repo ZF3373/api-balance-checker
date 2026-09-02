@@ -18,25 +18,34 @@
 - **顺序优先 + 故障转移**：按列表顺序依次尝试，某个 Key 失败自动切换到下一个
 - 支持流式响应（SSE），兼容 ChatBox、NextChat、OpenAI SDK 等客户端
 - 统一 Key 自动生成，可复制、可重新生成
-- 支持端点：
-  - `POST /v1/chat/completions`（带故障转移）
-  - `POST /v1/embeddings`（带故障转移）
-  - `GET /v1/models`（聚合所有上游模型列表去重返回）
+- 支持端点：`/v1/chat/completions`、`/v1/embeddings`、`/v1/models`
 
-## 启动方式
+### 3. 自动更新
+- 应用内一键检查更新（顶栏 🔄 按钮）
+- 发现新版本后自动下载，下载完成点击「重启安装」即可更新
+- 每次 commit 到 main 分支自动触发 GitHub Actions 构建发布 nightly 版本
 
-### 方式一：双击启动
+## 安装
 
-双击 `启动.bat` 即可。
+### 方式一：下载安装包（推荐）
 
-### 方式二：命令行启动
+前往 [Releases 页面](https://github.com/ZF3373/api-balance-checker/releases) 下载最新的 `.exe` 安装包，双击安装即可。
+
+### 方式二：从源码运行
 
 ```bash
+git clone https://github.com/ZF3373/api-balance-checker.git
 cd api-balance-checker
+npm install
 npm start
 ```
 
-> 首次使用需先安装依赖：`npm install`（已安装可跳过）
+### 方式三：本地打包
+
+```bash
+npm install
+npm run dist    # 生成 dist/ 目录下的安装包
+```
 
 ## 使用说明
 
@@ -58,6 +67,12 @@ npm start
    - API Key: 统一 Key
 5. 代理会按 Key 列表顺序转发请求，失败自动切换到下一个 Key
 
+### 检查更新
+
+- 点击顶栏 🔄 按钮检查更新
+- 发现新版本后顶部滑出更新条，显示下载进度
+- 下载完成后点击「重启安装」一键更新
+
 ### 故障转移规则
 
 | 上游响应 | 处理方式 |
@@ -72,16 +87,17 @@ npm start
 
 ```
 api-balance-checker/
-├── main.js              # Electron 主进程（窗口 + IPC）
+├── main.js              # Electron 主进程（窗口 + IPC + 自动更新）
 ├── preload.js           # 预加载脚本（安全暴露 API）
 ├── proxy.js             # 聚合代理服务器（鉴权 + 故障转移 + 流式转发）
 ├── providers.js         # 余额查询逻辑（各提供商适配）
 ├── store.js             # 本地存储（Key 配置 + 设置）
+├── build/icon.svg       # 应用图标
+├── .github/workflows/   # CI nightly 构建
 ├── package.json
-├── 启动.bat             # Windows 一键启动
 └── renderer/
     ├── index.html       # 页面结构
-    ├── styles.css       # 样式
+    ├── styles.css       # 深色主题样式
     └── renderer.js      # 前端逻辑
 ```
 
@@ -95,5 +111,5 @@ Key 配置和设置保存在 Electron 的 userData 目录下 `keys.json`：
 
 - 代理服务器仅监听 `127.0.0.1`，不对外暴露
 - API Key 明文存储于本地文件，请勿在公共设备使用
-- 各提供商余额接口可能调整，若查询失败可改用「自定义」类型手动配置
-- 代理支持的客户端：任何兼容 OpenAI API 格式的工具（ChatBox、NextChat、OpenAI SDK、LangChain 等）
+- nightly 版本每次 commit 自动构建，版本号格式 `1.0.0-nightly.YYYYMMDD.sha7`
+- 自动更新从 GitHub Releases 拉取，仅打包后的安装版支持（源码运行不支持）

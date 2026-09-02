@@ -3,10 +3,55 @@
   "version": "1.0.0",
   "description": "个人自用 API Key 聚合管理 + 余额查询桌面工具",
   "main": "main.js",
+  "author": "ZF3373",
+  "license": "MIT",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "release": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-log": "^5.2.0",
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.zf3373.api-balance-checker",
+    "productName": "API余额查询",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "providers.js",
+      "proxy.js",
+      "store.js",
+      "renderer/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.svg"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "ZF3373",
+      "repo": "api-balance-checker",
+      "releaseType": "prerelease"
+    }
   }
 }

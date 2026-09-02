@@ -22,4 +22,14 @@ contextBridge.exposeInMainWorld('api', {
     regenerateKey: () => ipcRenderer.invoke('server:regenerateKey'),
     getPort: () => ipcRenderer.invoke('server:getPort'),
   },
+  updater: {
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    getVersion: () => ipcRenderer.invoke('update:getVersion'),
+    onStatus: (callback) => {
+      const handler = (_e, status) => callback(status);
+      ipcRenderer.on('update:status', handler);
+      return () => ipcRenderer.removeListener('update:status', handler);
+    },
+  },
 });

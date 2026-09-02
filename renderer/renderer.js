@@ -18,12 +18,52 @@ const baseUrlInput = $('f-baseurl');
 const baseUrlHint = $('f-baseurl-hint');
 const customFields = $('custom-fields');
 
+// ─── Toast 通知 ───
+function showToast(msg, type = 'info', duration = 3000) {
+  const container = $('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(20px)';
+    toast.style.transition = 'all 0.25s ease';
+    setTimeout(() => toast.remove(), 250);
+  }, duration);
+}
+
+// ─── 确认对话框 ───
+function showConfirm(text, onConfirm) {
+  const dialog = $('confirm-dialog');
+  $('confirm-text').textContent = text;
+  dialog.classList.remove('hidden');
+
+  const ok = $('confirm-ok');
+  const cancel = $('confirm-cancel');
+  const backdrop = dialog.querySelector('.confirm-backdrop');
+
+  const cleanup = () => {
+    dialog.classList.add('hidden');
+    ok.removeEventListener('click', okHandler);
+    cancel.removeEventListener('click', cancelHandler);
+    backdrop.removeEventListener('click', cancelHandler);
+  };
+  const okHandler = () => { cleanup(); onConfirm(); };
+  const cancelHandler = () => cleanup();
+
+  ok.addEventListener('click', okHandler);
+  cancel.addEventListener('click', cancelHandler);
+  backdrop.addEventListener('click', cancelHandler);
+}
+
 // ─── 初始化 ───
 async function init() {
   providers = await window.api.providers.list();
   renderProviderOptions();
   await refreshKeys();
   await initProxy();
+  await initUpdater();
   bindEvents();
 }
 
@@ -76,26 +116,108 @@ async function toggleProxy() {
   if (proxyRunning) {
     await window.api.server.stop();
     updateProxyUI(false, null, null);
+    showToast('代理已停止', 'info');
   } else {
     const port = parseInt($('proxy-port').value, 10) || 9527;
     const result = await window.api.server.start(port);
     if (!result.ok) {
-      alert('启动失败: ' + (result.error || '端口可能被占用'));
+      showToast('启动失败: ' + (result.error || '端口可能被占用'), 'error');
       updateProxyUI(false, port, null);
     } else {
       const key = await window.api.server.getUnifiedKey();
       updateProxyUI(true, result.port, key);
+      showToast('代理已启动', 'success');
     }
   }
   toggle.disabled = false;
 }
 
+// ─── 自动更新 ───
+async function initUpdater() {
+  // 显示版本号
+  const version = await window.api.updater.getVersion();
+  $('app-version').textContent = `v${version}`;
+
+  // 监听更新状态
+  window.api.updater.onStatus((status) => {
+    if (!status) return;
+    handleUpdateStatus(status);
+  });
+}
+
+function handleUpdateStatus(status) {
+  const bar = $('update-bar');
+  const versionEl = $('update-version');
+  const actionBtn = $('update-action');
+  const progressWrap = $('update-progress-wrap');
+  const progressBar = $('update-progress-bar');
+  const pctEl = $('update-pct');
+
+  if (status.error) {
+    bar.classList.remove('show');
+    showToast('更新检查失败: ' + status.error, 'error');
+    return;
+  }
+
+  if (status.checking) {
+    const btn = $('check-update');
+    btn.innerHTML = '<span class="spinner"></span>';
+    btn.disabled = true;
+    return;
+  }
+
+  // 恢复检查按钮
+  const btn = $('check-update');
+  btn.innerHTML = '🔄';
+  btn.disabled = false;
+
+  if (status.notAvailable) {
+    showToast('已是最新版本', 'info');
+    bar.classList.remove('show');
+    return;
+  }
+
+  if (status.version) {
+    bar.classList.add('show');
+    versionEl.textContent = `v${status.version}`;
+
+    if (status.downloaded) {
+      progressWrap.style.display = 'none';
+      pctEl.style.display = 'none';
+      actionBtn.textContent = '重启安装';
+      actionBtn.disabled = false;
+      actionBtn.onclick = () => window.api.updater.install();
+    } else if (status.progress != null) {
+      progressWrap.style.display = 'block';
+      pctEl.style.display = 'inline';
+      progressBar.style.width = `${status.progress}%`;
+      pctEl.textContent = `${status.progress}%`;
+      actionBtn.textContent = '下载中...';
+      actionBtn.disabled = true;
+    } else {
+      progressWrap.style.display = 'none';
+      pctEl.style.display = 'none';
+      actionBtn.textContent = '下载中...';
+      actionBtn.disabled = true;
+    }
+  }
+}
+
+async function checkUpdate() {
+  const btn = $('check-update');
+  btn.innerHTML = '<span class="spinner"></span>';
+  btn.disabled = true;
+  const result = await window.api.updater.check();
+  if (!result.ok) {
+    btn.innerHTML = '🔄';
+    btn.disabled = false;
+    showToast('检查失败: ' + (result.error || ''), 'error');
+  }
+}
+
 function renderProviderOptions() {
   providerSelect.innerHTML = providers
-    .map(
-      (p) =>
-        `<option value="${p.key}">${p.name}${p.defaultBaseUrl ? '' : ''}</option>`,
-    )
+    .map((p) => `<option value="${p.key}">${p.name}</option>`)
     .join('');
 }
 
@@ -104,6 +226,7 @@ function bindEvents() {
   $('add-key').addEventListener('click', () => openModal());
   $('empty-add').addEventListener('click', () => openModal());
   $('refresh-all').addEventListener('click', refreshAll);
+  $('check-update').addEventListener('click', checkUpdate);
 
   $('modal-close').addEventListener('click', closeModal);
   $('modal-cancel').addEventListener('click', closeModal);
@@ -118,7 +241,12 @@ function bindEvents() {
   $('regen-key').addEventListener('click', regenUnifiedKey);
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+    if (e.key === 'Escape') {
+      if (!modal.classList.contains('hidden')) closeModal();
+      if (!$('confirm-dialog').classList.contains('hidden')) {
+        $('confirm-dialog').classList.add('hidden');
+      }
+    }
   });
 }
 
@@ -127,20 +255,20 @@ async function copyUnifiedKey() {
   if (!key) return;
   try {
     await navigator.clipboard.writeText(key);
-    const btn = $('copy-key');
-    const orig = btn.textContent;
-    btn.textContent = '✓';
-    setTimeout(() => (btn.textContent = orig), 1500);
+    showToast('统一 Key 已复制', 'success', 1500);
   } catch {
     $('unified-key').select();
     document.execCommand('copy');
+    showToast('统一 Key 已复制', 'success', 1500);
   }
 }
 
 async function regenUnifiedKey() {
-  if (!confirm('重新生成统一 Key 后，旧的 Key 将失效，所有使用旧 Key 的客户端需要更新。确认？')) return;
-  const newKey = await window.api.server.regenerateKey();
-  $('unified-key').value = newKey;
+  showConfirm('重新生成统一 Key 后，旧的 Key 将失效，所有使用旧 Key 的客户端需要更新。确认？', async () => {
+    const newKey = await window.api.server.regenerateKey();
+    $('unified-key').value = newKey;
+    showToast('统一 Key 已重新生成', 'success');
+  });
 }
 
 function onProviderChange() {
@@ -151,7 +279,7 @@ function onProviderChange() {
     baseUrlHint.textContent = `留空则使用默认: ${p.defaultBaseUrl}`;
   } else {
     baseUrlInput.placeholder = 'https://...';
-    baseUrlHint.textContent = p.key === 'custom' ? '必填' : '必填';
+    baseUrlHint.textContent = '必填';
   }
   customFields.classList.toggle('hidden', p.key !== 'custom');
 }
@@ -196,8 +324,10 @@ async function onSave(e) {
 
   if (editingId) {
     await window.api.keys.update(editingId, entry);
+    showToast('已更新', 'success', 1500);
   } else {
     await window.api.keys.add(entry);
+    showToast('已添加', 'success', 1500);
   }
 
   closeModal();
@@ -221,7 +351,6 @@ function renderList() {
 
   keyList.innerHTML = keys.map(renderCard).join('');
 
-  // 绑定按钮事件
   keys.forEach((k) => {
     const card = document.querySelector(`[data-id="${k.id}"]`);
     if (!card) return;
@@ -239,7 +368,6 @@ function renderCard(k) {
   const providerName = provider ? provider.name : k.provider;
   const isQuerying = queryingIds.has(k.id);
 
-  // 余额显示
   let balanceHtml;
   let badgeHtml;
   if (isQuerying) {
@@ -315,9 +443,11 @@ async function refreshAll() {
 async function deleteOne(id) {
   const item = keys.find((k) => k.id === id);
   if (!item) return;
-  if (!confirm(`确认删除「${item.name}」？`)) return;
-  await window.api.keys.remove(id);
-  await refreshKeys();
+  showConfirm(`确认删除「${item.name}」？`, async () => {
+    await window.api.keys.remove(id);
+    await refreshKeys();
+    showToast('已删除', 'info', 1500);
+  });
 }
 
 // ─── 工具函数 ───

@@ -10,13 +10,29 @@
   <header class="topbar">
     <div class="brand">
       <span class="logo">🔑</span>
-      <h1>API Key 余额查询</h1>
+      <h1>API Key 余额查询 <span class="version" id="app-version"></span></h1>
     </div>
     <div class="actions">
+      <button id="check-update" class="btn btn-icon" title="检查更新">🔄</button>
       <button id="refresh-all" class="btn btn-primary">↻ 刷新全部</button>
       <button id="add-key" class="btn">+ 添加 Key</button>
     </div>
   </header>
+
+  <!-- 更新提示条 -->
+  <div id="update-bar" class="update-bar">
+    <div class="update-text">
+      <span>🚀 发现新版本</span>
+      <span class="ver" id="update-version"></span>
+    </div>
+    <div style="display:flex;align-items:center;">
+      <div id="update-progress-wrap" class="update-progress" style="display:none;">
+        <div id="update-progress-bar" class="update-progress-bar" style="width:0%"></div>
+      </div>
+      <span id="update-pct" class="update-pct" style="display:none;"></span>
+      <button id="update-action" class="btn btn-primary btn-sm" style="margin-left:12px;">下载中...</button>
+    </div>
+  </div>
 
   <!-- 聚合代理控制区 -->
   <section class="proxy-bar">
@@ -108,6 +124,21 @@
       </form>
     </div>
   </div>
+
+  <!-- 确认对话框 -->
+  <div id="confirm-dialog" class="confirm-dialog hidden">
+    <div class="confirm-backdrop"></div>
+    <div class="confirm-box">
+      <p id="confirm-text"></p>
+      <div class="confirm-actions">
+        <button class="btn" id="confirm-cancel">取消</button>
+        <button class="btn btn-danger" id="confirm-ok">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 容器 -->
+  <div id="toast-container" class="toast-container"></div>
 
   <script src="renderer.js"></script>
 </body>
