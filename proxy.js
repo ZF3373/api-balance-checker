@@ -3,6 +3,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const store = require('./store');
+const { PROVIDERS } = require('./providers');
 
 let server = null;
 let currentPort = null;
@@ -34,8 +35,20 @@ function authenticate(req) {
 
 // ─── 工具函数 ───
 
+/**
+ * 解析 Key 条目的有效 baseUrl：
+ * 优先用用户填写的 baseUrl，留空时回退到提供商默认值。
+ * 与主进程余额查询/模型获取的逻辑保持一致。
+ */
+function resolveBaseUrl(keyEntry) {
+  const base = (keyEntry.baseUrl || '').trim();
+  if (base) return base;
+  const provider = PROVIDERS[keyEntry.provider];
+  return (provider && provider.defaultBaseUrl) || '';
+}
+
 function getUpstreamUrl(keyEntry, path) {
-  const base = (keyEntry.baseUrl || '').replace(/\/$/, '');
+  const base = resolveBaseUrl(keyEntry).replace(/\/$/, '');
   const cleanPath = path.replace(/^\//, '');
   return `${base}/${cleanPath}`;
 }
@@ -92,7 +105,7 @@ async function handleChatCompletions(req, res, body) {
   let lastError = null;
 
   for (const keyEntry of keys) {
-    const base = (keyEntry.baseUrl || '');
+    const base = resolveBaseUrl(keyEntry);
     if (!base) continue;
 
     try {
@@ -149,7 +162,7 @@ async function handleEmbeddings(req, res, body) {
   let lastError = null;
 
   for (const keyEntry of keys) {
-    const base = (keyEntry.baseUrl || '');
+    const base = resolveBaseUrl(keyEntry);
     if (!base) continue;
 
     try {
@@ -197,7 +210,7 @@ async function handleMessages(req, res, body) {
   let lastError = null;
 
   for (const keyEntry of keys) {
-    const base = (keyEntry.baseUrl || '');
+    const base = resolveBaseUrl(keyEntry);
     if (!base) continue;
 
     try {
@@ -248,7 +261,7 @@ async function handleModels(req, res) {
 
   const results = await Promise.allSettled(
     keys
-      .filter((k) => k.baseUrl)
+      .filter((k) => resolveBaseUrl(k))
       .map(async (k) => {
         const upstreamRes = await tryUpstream(k, 'GET', 'v1/models', null, req.headers);
         if (!upstreamRes.ok) throw new Error(`${k.name}: ${upstreamRes.status}`);
