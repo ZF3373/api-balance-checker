@@ -70,6 +70,39 @@ function normalizeBaseUrl(baseUrl) {
 }
 
 /**
+ * 解析 Key 条目的有效 baseUrl：
+ * 优先用用户填写的 baseUrl（trim），留空时回退到提供商默认值。
+ * main.js 与 proxy.js 共用，避免两处手写不一致。
+ */
+function resolveBaseUrl(keyEntry) {
+  const base = (keyEntry.baseUrl || '').trim();
+  if (base) return base;
+  const provider = PROVIDERS[(keyEntry || {}).provider];
+  return (provider && provider.defaultBaseUrl) || '';
+}
+
+/**
+ * 统一错误消息：AbortError → 请求超时，其余取 message 或字符串。
+ * 供 main.js / proxy.js 所有 catch 块复用。
+ */
+function toErrorMessage(err) {
+  if (!err) return '未知错误';
+  return err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
+}
+
+/**
+ * 通用余额查询骨架：fetch → 校验状态 → 解析 JSON → 提取字段。
+ * 各 provider 只需提供 url、headers 和 getValue 提取函数。
+ */
+async function fetchBalance(url, { headers, timeoutMs = 15000, getValue } = {}) {
+  const res = await fetchWithTimeout(url, { headers }, timeoutMs);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await tryJson(res);
+  if (!json) throw new Error('响应非 JSON');
+  return getValue(json);
+}
+
+/**
  * OpenAI 兼容平台的多策略余额查询（供中转站等接口未知的平台使用）。
  * 依次尝试已知的余额查询接口，命中即返回。
  */
@@ -169,18 +202,17 @@ const PROVIDERS = {
     defaultBaseUrl: 'https://api.deepseek.com',
     currency: 'CNY',
     async queryBalance(baseUrl, apiKey) {
-      const res = await fetchWithTimeout(`${baseUrl}/user/balance`, {
+      return fetchBalance(`${baseUrl}/user/balance`, {
         headers: { Authorization: `Bearer ${apiKey}` },
+        getValue: (json) => {
+          const info = (json.balance_infos && json.balance_infos[0]) || {};
+          return {
+            balance: parseFloat(info.total_balance ?? '0'),
+            currency: info.currency || 'CNY',
+            raw: json,
+          };
+        },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await tryJson(res);
-      if (!json) throw new Error('响应非 JSON');
-      const info = (json.balance_infos && json.balance_infos[0]) || {};
-      return {
-        balance: parseFloat(info.total_balance ?? '0'),
-        currency: info.currency || 'CNY',
-        raw: json,
-      };
     },
   },
 
@@ -191,18 +223,17 @@ const PROVIDERS = {
     currency: 'CNY',
     async queryBalance(baseUrl, apiKey) {
       const token = generateZhipuJWT(apiKey);
-      const res = await fetchWithTimeout(`${baseUrl}/api/billing/v1/current-balance`, {
+      return fetchBalance(`${baseUrl}/api/billing/v1/current-balance`, {
         headers: { Authorization: `Bearer ${token}` },
+        getValue: (json) => {
+          const d = json.data || json;
+          return {
+            balance: parseFloat(d.balance ?? '0'),
+            currency: 'CNY',
+            raw: json,
+          };
+        },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await tryJson(res);
-      if (!json) throw new Error('响应非 JSON');
-      const d = json.data || json;
-      return {
-        balance: parseFloat(d.balance ?? '0'),
-        currency: 'CNY',
-        raw: json,
-      };
     },
   },
 
@@ -212,18 +243,17 @@ const PROVIDERS = {
     defaultBaseUrl: 'https://api.siliconflow.cn',
     currency: 'CNY',
     async queryBalance(baseUrl, apiKey) {
-      const res = await fetchWithTimeout(`${baseUrl}/v1/user/info`, {
+      return fetchBalance(`${baseUrl}/v1/user/info`, {
         headers: { Authorization: `Bearer ${apiKey}` },
+        getValue: (json) => {
+          const d = json.data || {};
+          return {
+            balance: parseFloat(d.balance ?? '0'),
+            currency: 'CNY',
+            raw: json,
+          };
+        },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await tryJson(res);
-      if (!json) throw new Error('响应非 JSON');
-      const d = json.data || {};
-      return {
-        balance: parseFloat(d.balance ?? '0'),
-        currency: 'CNY',
-        raw: json,
-      };
     },
   },
 
@@ -233,18 +263,17 @@ const PROVIDERS = {
     defaultBaseUrl: 'https://api.moonshot.cn',
     currency: 'CNY',
     async queryBalance(baseUrl, apiKey) {
-      const res = await fetchWithTimeout(`${baseUrl}/v1/users/me/balance`, {
+      return fetchBalance(`${baseUrl}/v1/users/me/balance`, {
         headers: { Authorization: `Bearer ${apiKey}` },
+        getValue: (json) => {
+          const d = json.data || json;
+          return {
+            balance: parseFloat(d.available_balance ?? d.balance ?? '0'),
+            currency: 'CNY',
+            raw: json,
+          };
+        },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await tryJson(res);
-      if (!json) throw new Error('响应非 JSON');
-      const d = json.data || json;
-      return {
-        balance: parseFloat(d.available_balance ?? d.balance ?? '0'),
-        currency: 'CNY',
-        raw: json,
-      };
     },
   },
 
@@ -254,20 +283,19 @@ const PROVIDERS = {
     defaultBaseUrl: 'https://openrouter.ai',
     currency: 'USD',
     async queryBalance(baseUrl, apiKey) {
-      const res = await fetchWithTimeout(`${baseUrl}/api/v1/auth/key`, {
+      return fetchBalance(`${baseUrl}/api/v1/auth/key`, {
         headers: { Authorization: `Bearer ${apiKey}` },
+        getValue: (json) => {
+          const d = json.data || {};
+          const limit = parseFloat(d.limit ?? '0');
+          const usage = parseFloat(d.usage ?? '0');
+          return {
+            balance: limit - usage,
+            currency: 'USD',
+            raw: json,
+          };
+        },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await tryJson(res);
-      if (!json) throw new Error('响应非 JSON');
-      const d = json.data || {};
-      const limit = parseFloat(d.limit ?? '0');
-      const usage = parseFloat(d.usage ?? '0');
-      return {
-        balance: limit - usage,
-        currency: 'USD',
-        raw: json,
-      };
     },
   },
 
@@ -372,19 +400,18 @@ const PROVIDERS = {
     async queryBalance(baseUrl, apiKey, extra = {}) {
       const path = (extra.customBalancePath || '').replace(/^\//, '');
       const url = `${baseUrl.replace(/\/$/, '')}/${path}`;
-      const res = await fetchWithTimeout(url, {
+      return fetchBalance(url, {
         headers: { Authorization: `Bearer ${apiKey}` },
+        getValue: (json) => {
+          const val = getByPath(json, extra.customJsonPath);
+          if (val == null) throw new Error(`JSON 路径 "${extra.customJsonPath}" 未找到值`);
+          return {
+            balance: parseFloat(val),
+            currency: extra.customCurrency || '',
+            raw: json,
+          };
+        },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await tryJson(res);
-      if (!json) throw new Error('响应非 JSON');
-      const val = getByPath(json, extra.customJsonPath);
-      if (val == null) throw new Error(`JSON 路径 "${extra.customJsonPath}" 未找到值`);
-      return {
-        balance: parseFloat(val),
-        currency: extra.customCurrency || '',
-        raw: json,
-      };
     },
   },
 };
@@ -398,4 +425,13 @@ const PROVIDER_LIST = Object.entries(PROVIDERS).map(([key, p]) => ({
   isCustom: key === 'custom',
 }));
 
-module.exports = { PROVIDERS, PROVIDER_LIST, getByPath };
+module.exports = {
+  PROVIDERS,
+  PROVIDER_LIST,
+  getByPath,
+  normalizeBaseUrl,
+  resolveBaseUrl,
+  toErrorMessage,
+  fetchWithTimeout,
+  tryJson,
+};

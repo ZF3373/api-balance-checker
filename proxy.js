@@ -3,7 +3,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const store = require('./store');
-const { PROVIDERS } = require('./providers');
+const { PROVIDERS, resolveBaseUrl, toErrorMessage, fetchWithTimeout } = require('./providers');
 
 let server = null;
 let currentPort = null;
@@ -41,18 +41,6 @@ function authenticate(req) {
 }
 
 // ─── 工具函数 ───
-
-/**
- * 解析 Key 条目的有效 baseUrl：
- * 优先用用户填写的 baseUrl，留空时回退到提供商默认值。
- * 与主进程余额查询/模型获取的逻辑保持一致。
- */
-function resolveBaseUrl(keyEntry) {
-  const base = (keyEntry.baseUrl || '').trim();
-  if (base) return base;
-  const provider = PROVIDERS[keyEntry.provider];
-  return (provider && provider.defaultBaseUrl) || '';
-}
 
 function getUpstreamUrl(keyEntry, path) {
   const base = resolveBaseUrl(keyEntry).replace(/\/$/, '');
@@ -191,147 +179,31 @@ function refreshRouteMap() {
 
 // ─── 单次上游转发 ───
 
-async function tryUpstream(keyEntry, method, path, reqBody, reqHeaders, { stream = false } = {}) {
+async function tryUpstream(keyEntry, method, path, reqBody, reqHeaders) {
   const url = getUpstreamUrl(keyEntry, path);
   const headers = buildUpstreamHeaders({ headers: reqHeaders }, keyEntry);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60000);
-
-  try {
-    const upstreamRes = await fetch(url, {
-      method,
-      headers,
-      body: method !== 'GET' && method !== 'HEAD' ? reqBody : undefined,
-      signal: controller.signal,
-    });
-    return upstreamRes;
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetchWithTimeout(url, {
+    method,
+    headers,
+    body: method !== 'GET' && method !== 'HEAD' ? reqBody : undefined,
+  }, 60000);
 }
 
-// ─── chat/completions 转发（带故障转移） ───
+// ─── 统一故障转移转发 ───
 
-async function handleChatCompletions(req, res, body) {
-  const keys = getCandidateKeys(body);
-  if (keys.length === 0) {
+async function forwardWithFailover({ keyEntries, method, upstreamPath, body, reqHeaders, res, errorType = 'server_error' }) {
+  if (!keyEntries || keyEntries.length === 0) {
     return sendJson(res, 503, { error: { message: '没有可用的 API Key，请先添加', type: 'server_error' } });
   }
 
   let lastError = null;
 
-  for (const keyEntry of keys) {
+  for (const keyEntry of keyEntries) {
     const base = resolveBaseUrl(keyEntry);
     if (!base) continue;
 
     try {
-      const upstreamRes = await tryUpstream(keyEntry, 'POST', 'v1/chat/completions', body, req.headers);
-
-      // 成功 → 透传响应（支持流式）
-      if (upstreamRes.ok) {
-        relayResponse(res, upstreamRes);
-        return;
-      }
-
-      // 401/403 → key 无效，跳过试下一个
-      if (upstreamRes.status === 401 || upstreamRes.status === 403) {
-        lastError = `${keyEntry.name}: 鉴权失败(${upstreamRes.status})`;
-        continue;
-      }
-
-      // 429/5xx → 该 key 暂时不可用，跳过试下一个
-      if (upstreamRes.status === 429 || upstreamRes.status >= 500) {
-        const errText = await upstreamRes.text().catch(() => '');
-        lastError = `${keyEntry.name}: 上游错误(${upstreamRes.status}) ${errText.slice(0, 200)}`;
-        continue;
-      }
-
-      // 其他 4xx（400/404 等）—— 多平台聚合时可能是该上游不支持此模型，
-      // 跳过试下一个 Key；若全部 Key 都返回 4xx，最后再返回最后一个错误
-      const errText = await upstreamRes.text().catch(() => '');
-      lastError = `${keyEntry.name}: HTTP ${upstreamRes.status} ${errText.slice(0, 200)}`;
-      continue;
-    } catch (err) {
-      // 网络错误/超时 → 跳过试下一个
-      const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
-      lastError = `${keyEntry.name}: ${msg}`;
-      continue;
-    }
-  }
-
-  // 全部失败
-  sendJson(res, 502, {
-    error: {
-      message: `所有 API Key 均不可用。最后错误: ${lastError || '未知错误'}`,
-      type: 'server_error',
-    },
-  });
-}
-
-// ─── embeddings 转发（带故障转移） ───
-
-async function handleEmbeddings(req, res, body) {
-  const keys = getCandidateKeys(body);
-  if (keys.length === 0) {
-    return sendJson(res, 503, { error: { message: '没有可用的 API Key', type: 'server_error' } });
-  }
-
-  let lastError = null;
-
-  for (const keyEntry of keys) {
-    const base = resolveBaseUrl(keyEntry);
-    if (!base) continue;
-
-    try {
-      const upstreamRes = await tryUpstream(keyEntry, 'POST', 'v1/embeddings', body, req.headers);
-
-      if (upstreamRes.ok) {
-        relayResponse(res, upstreamRes);
-        return;
-      }
-
-      if (upstreamRes.status === 401 || upstreamRes.status === 403) {
-        lastError = `${keyEntry.name}: 鉴权失败`;
-        continue;
-      }
-
-      if (upstreamRes.status === 429 || upstreamRes.status >= 500) {
-        lastError = `${keyEntry.name}: 上游错误(${upstreamRes.status})`;
-        continue;
-      }
-
-      // 其他 4xx —— 多平台聚合时可能是该上游不支持此模型，跳过试下一个
-      const errText = await upstreamRes.text().catch(() => '');
-      lastError = `${keyEntry.name}: HTTP ${upstreamRes.status} ${errText.slice(0, 200)}`;
-      continue;
-    } catch (err) {
-      const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
-      lastError = `${keyEntry.name}: ${msg}`;
-      continue;
-    }
-  }
-
-  sendJson(res, 502, {
-    error: { message: `所有 API Key 均不可用。最后错误: ${lastError}`, type: 'upstream_error' },
-  });
-}
-
-// ─── Anthropic Messages 转发（带故障转移） ───
-
-async function handleMessages(req, res, body) {
-  const keys = getCandidateKeys(body);
-  if (keys.length === 0) {
-    return sendJson(res, 503, { error: { message: '没有可用的 API Key，请先添加', type: 'server_error' } });
-  }
-
-  let lastError = null;
-
-  for (const keyEntry of keys) {
-    const base = resolveBaseUrl(keyEntry);
-    if (!base) continue;
-
-    try {
-      const upstreamRes = await tryUpstream(keyEntry, 'POST', 'v1/messages', body, req.headers);
+      const upstreamRes = await tryUpstream(keyEntry, method, upstreamPath, body, reqHeaders);
 
       if (upstreamRes.ok) {
         relayResponse(res, upstreamRes);
@@ -354,16 +226,15 @@ async function handleMessages(req, res, body) {
       lastError = `${keyEntry.name}: HTTP ${upstreamRes.status} ${errText.slice(0, 200)}`;
       continue;
     } catch (err) {
-      const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
-      lastError = `${keyEntry.name}: ${msg}`;
+      lastError = `${keyEntry.name}: ${toErrorMessage(err)}`;
       continue;
     }
   }
 
   sendJson(res, 502, {
     error: {
-      type: 'server_error',
       message: `所有 API Key 均不可用。最后错误: ${lastError || '未知错误'}`,
+      type: errorType,
     },
   });
 }
@@ -427,52 +298,48 @@ function handleModelDetail(req, res, modelId) {
 // ─── 通用转发（带故障转移，供 images/audio/moderations/count_tokens 等复用） ───
 
 async function handleForward(method, upstreamPath, reqBody, reqHeaders, res) {
-  const keys = getCandidateKeys(reqBody);
-  if (keys.length === 0) {
-    return sendJson(res, 503, { error: { message: '没有可用的 API Key，请先添加', type: 'server_error' } });
-  }
+  await forwardWithFailover({
+    keyEntries: getCandidateKeys(reqBody),
+    method,
+    upstreamPath,
+    body: reqBody,
+    reqHeaders,
+    res,
+  });
+}
 
-  let lastError = null;
+// ─── 各端点薄封装 ───
 
-  for (const keyEntry of keys) {
-    const base = resolveBaseUrl(keyEntry);
-    if (!base) continue;
+async function handleChatCompletions(req, res, body) {
+  await forwardWithFailover({
+    keyEntries: getCandidateKeys(body),
+    method: 'POST',
+    upstreamPath: 'v1/chat/completions',
+    body,
+    reqHeaders: req.headers,
+    res,
+  });
+}
 
-    try {
-      const upstreamRes = await tryUpstream(keyEntry, method, upstreamPath, reqBody, reqHeaders);
+async function handleEmbeddings(req, res, body) {
+  await forwardWithFailover({
+    keyEntries: getCandidateKeys(body),
+    method: 'POST',
+    upstreamPath: 'v1/embeddings',
+    body,
+    reqHeaders: req.headers,
+    res,
+  });
+}
 
-      if (upstreamRes.ok) {
-        relayResponse(res, upstreamRes);
-        return;
-      }
-
-      if (upstreamRes.status === 401 || upstreamRes.status === 403) {
-        lastError = `${keyEntry.name}: 鉴权失败(${upstreamRes.status})`;
-        continue;
-      }
-
-      if (upstreamRes.status === 429 || upstreamRes.status >= 500) {
-        const errText = await upstreamRes.text().catch(() => '');
-        lastError = `${keyEntry.name}: 上游错误(${upstreamRes.status}) ${errText.slice(0, 200)}`;
-        continue;
-      }
-
-      // 其他 4xx —— 可能该上游不支持此模型/功能，跳过试下一个
-      const errText = await upstreamRes.text().catch(() => '');
-      lastError = `${keyEntry.name}: HTTP ${upstreamRes.status} ${errText.slice(0, 200)}`;
-      continue;
-    } catch (err) {
-      const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
-      lastError = `${keyEntry.name}: ${msg}`;
-      continue;
-    }
-  }
-
-  sendJson(res, 502, {
-    error: {
-      message: `所有 API Key 均不可用。最后错误: ${lastError || '未知错误'}`,
-      type: 'server_error',
-    },
+async function handleMessages(req, res, body) {
+  await forwardWithFailover({
+    keyEntries: getCandidateKeys(body),
+    method: 'POST',
+    upstreamPath: 'v1/messages',
+    body,
+    reqHeaders: req.headers,
+    res,
   });
 }
 

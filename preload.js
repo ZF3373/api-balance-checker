@@ -1,44 +1,45 @@
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');
+const CH = require('./shared/ipc-channels');
 
 contextBridge.exposeInMainWorld('api', {
   providers: {
-    list: () => ipcRenderer.invoke('providers:list'),
+    list: () => ipcRenderer.invoke(CH.providersList),
   },
   keys: {
-    list: () => ipcRenderer.invoke('keys:list'),
-    add: (entry) => ipcRenderer.invoke('keys:add', entry),
-    addBatch: (payload) => ipcRenderer.invoke('keys:addBatch', payload),
-    update: (id, patch) => ipcRenderer.invoke('keys:update', id, patch),
-    remove: (id) => ipcRenderer.invoke('keys:delete', id),
-    dedup: () => ipcRenderer.invoke('keys:dedup'),
-    query: (id) => ipcRenderer.invoke('keys:query', id),
-    queryAll: () => ipcRenderer.invoke('keys:queryAll'),
-    models: (id) => ipcRenderer.invoke('keys:models', id),
-    test: (id) => ipcRenderer.invoke('keys:test', id),
+    list: () => ipcRenderer.invoke(CH.keysList),
+    add: (entry) => ipcRenderer.invoke(CH.keysAdd, entry),
+    addBatch: (payload) => ipcRenderer.invoke(CH.keysAddBatch, payload),
+    update: (id, patch) => ipcRenderer.invoke(CH.keysUpdate, id, patch),
+    remove: (id) => ipcRenderer.invoke(CH.keysDelete, id),
+    dedup: () => ipcRenderer.invoke(CH.keysDedup),
+    query: (id) => ipcRenderer.invoke(CH.keysQuery, id),
+    queryAll: () => ipcRenderer.invoke(CH.keysQueryAll),
+    models: (id) => ipcRenderer.invoke(CH.keysModels, id),
+    test: (id) => ipcRenderer.invoke(CH.keysTest, id),
   },
   server: {
-    start: (port) => ipcRenderer.invoke('server:start', port),
-    stop: () => ipcRenderer.invoke('server:stop'),
-    status: () => ipcRenderer.invoke('server:status'),
-    getUnifiedKey: () => ipcRenderer.invoke('server:getUnifiedKey'),
-    regenerateKey: () => ipcRenderer.invoke('server:regenerateKey'),
-    getPort: () => ipcRenderer.invoke('server:getPort'),
+    start: (port) => ipcRenderer.invoke(CH.serverStart, port),
+    stop: () => ipcRenderer.invoke(CH.serverStop),
+    status: () => ipcRenderer.invoke(CH.serverStatus),
+    getUnifiedKey: () => ipcRenderer.invoke(CH.serverGetUnifiedKey),
+    regenerateKey: () => ipcRenderer.invoke(CH.serverRegenerateKey),
+    getPort: () => ipcRenderer.invoke(CH.serverGetPort),
   },
   routes: {
-    get: () => ipcRenderer.invoke('routes:get'),
-    set: (modelId, keyId) => ipcRenderer.invoke('routes:set', modelId, keyId),
-    clear: () => ipcRenderer.invoke('routes:clear'),
+    get: () => ipcRenderer.invoke(CH.routesGet),
+    set: (modelId, keyId) => ipcRenderer.invoke(CH.routesSet, modelId, keyId),
+    clear: () => ipcRenderer.invoke(CH.routesClear),
   },
   updater: {
-    check: () => ipcRenderer.invoke('update:check'),
-    install: () => ipcRenderer.invoke('update:install'),
-    getVersion: () => ipcRenderer.invoke('update:getVersion'),
+    check: () => ipcRenderer.invoke(CH.updateCheck),
+    install: () => ipcRenderer.invoke(CH.updateInstall),
+    getVersion: () => ipcRenderer.invoke(CH.updateGetVersion),
     onStatus: (callback) => {
       const handler = (_e, status) => callback(status);
-      ipcRenderer.on('update:status', handler);
-      return () => ipcRenderer.removeListener('update:status', handler);
+      ipcRenderer.on(CH.updateStatus, handler);
+      return () => ipcRenderer.removeListener(CH.updateStatus, handler);
     },
   },
 });

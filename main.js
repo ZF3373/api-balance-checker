@@ -7,8 +7,9 @@ const semver = require('semver');
 const fs = require('fs');
 const os = require('os');
 const store = require('./store');
-const { PROVIDERS, PROVIDER_LIST } = require('./providers');
+const { PROVIDERS, PROVIDER_LIST, normalizeBaseUrl, resolveBaseUrl, toErrorMessage } = require('./providers');
 const proxy = require('./proxy');
+const CH = require('./shared/ipc-channels');
 const log = require('electron-log');
 
 let mainWindow = null;
@@ -33,6 +34,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false, // preload.js 需要 require('./shared/ipc-channels')，sandbox 模式下无法解析子目录模块
     },
   });
 
@@ -83,20 +85,20 @@ app.on('before-quit', () => {
 // ────────────────────── IPC 处理 ──────────────────────
 
 // 返回可用提供商列表
-ipcMain.handle('providers:list', () => PROVIDER_LIST);
+ipcMain.handle(CH.providersList, () => PROVIDER_LIST);
 
 // 返回所有 Key 配置（API Key 本身可返回，本地自用工具）
-ipcMain.handle('keys:list', () => store.getAllKeys());
+ipcMain.handle(CH.keysList, () => store.getAllKeys());
 
 // 新增
-ipcMain.handle('keys:add', async (_e, entry) => {
+ipcMain.handle(CH.keysAdd, async (_e, entry) => {
   const result = store.addKey(entry);
   proxy.refreshRouteMap();
   return result;
 });
 
 // 批量新增（同一平台多个 Key，自动去重 + 连续编号命名）
-ipcMain.handle('keys:addBatch', async (_e, payload) => {
+ipcMain.handle(CH.keysAddBatch, async (_e, payload) => {
   const {
     provider,
     baseUrl,
@@ -123,31 +125,31 @@ ipcMain.handle('keys:addBatch', async (_e, payload) => {
 });
 
 // 更新
-ipcMain.handle('keys:update', (_e, id, patch) => store.updateKey(id, patch));
+ipcMain.handle(CH.keysUpdate, (_e, id, patch) => store.updateKey(id, patch));
 
 // 删除
-ipcMain.handle('keys:delete', async (_e, id) => {
+ipcMain.handle(CH.keysDelete, async (_e, id) => {
   const result = store.deleteKey(id);
   proxy.refreshRouteMap();
   return result;
 });
 
 // 一键去重（按 apiKey 去除重复，保留首次配置）
-ipcMain.handle('keys:dedup', async () => {
+ipcMain.handle(CH.keysDedup, async () => {
   const result = store.dedupKeys();
   proxy.refreshRouteMap();
   return result;
 });
 
 // 查询单个 Key 余额
-ipcMain.handle('keys:query', async (_e, id) => {
+ipcMain.handle(CH.keysQuery, async (_e, id) => {
   const item = store.getKey(id);
   if (!item) return { error: 'Key 不存在' };
 
   const provider = PROVIDERS[item.provider];
   if (!provider) return { error: `未知提供商: ${item.provider}` };
 
-  const baseUrl = item.baseUrl || provider.defaultBaseUrl;
+  const baseUrl = resolveBaseUrl(item);
   if (!baseUrl && item.provider !== 'custom') {
     const err = `缺少 baseUrl，且 ${provider.name} 无默认值`;
     store.setQueryResult(item.id, { error: err, balance: null, currency: null });
@@ -163,14 +165,14 @@ ipcMain.handle('keys:query', async (_e, id) => {
     store.setQueryResult(item.id, result);
     return { ok: true, result };
   } catch (err) {
-    const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
+    const msg = toErrorMessage(err);
     store.setQueryResult(item.id, { error: msg, balance: null, currency: null });
     return { error: msg };
   }
 });
 
 // 查询全部 Key 余额（并发）
-ipcMain.handle('keys:queryAll', async () => {
+ipcMain.handle(CH.keysQueryAll, async () => {
   const keys = store.getAllKeys();
   await Promise.all(
     keys.map(async (k) => {
@@ -181,7 +183,7 @@ ipcMain.handle('keys:queryAll', async () => {
         store.setQueryResult(item.id, { error: '未知提供商', balance: null, currency: null });
         return;
       }
-      const baseUrl = item.baseUrl || provider.defaultBaseUrl;
+      const baseUrl = resolveBaseUrl(item);
       if (!baseUrl && item.provider !== 'custom') {
         store.setQueryResult(item.id, { error: `缺少 baseUrl`, balance: null, currency: null });
         return;
@@ -194,7 +196,7 @@ ipcMain.handle('keys:queryAll', async () => {
         });
         store.setQueryResult(item.id, result);
       } catch (err) {
-        const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
+        const msg = toErrorMessage(err);
         store.setQueryResult(item.id, { error: msg, balance: null, currency: null });
       }
     }),
@@ -203,13 +205,6 @@ ipcMain.handle('keys:queryAll', async () => {
 });
 
 // ─── 获取可用模型 + 连接测试 ───
-
-/**
- * 规范化 baseUrl：去除尾部斜杠和多余的 /v1 后缀
- */
-function normalizeBaseUrl(baseUrl) {
-  return baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
-}
 
 /**
  * 向上游 GET /v1/models 发起请求（不消耗 token）
@@ -225,14 +220,14 @@ async function fetchUpstreamModels(baseUrl, apiKey, timeoutMs = 15000) {
 }
 
 // 获取可用模型列表
-ipcMain.handle('keys:models', async (_e, id) => {
+ipcMain.handle(CH.keysModels, async (_e, id) => {
   const item = store.getKey(id);
   if (!item) return { error: 'Key 不存在' };
 
   const provider = PROVIDERS[item.provider];
   if (!provider) return { error: `未知提供商: ${item.provider}` };
 
-  const baseUrl = item.baseUrl || provider.defaultBaseUrl;
+  const baseUrl = resolveBaseUrl(item);
   if (!baseUrl) return { error: '缺少 baseUrl' };
 
   try {
@@ -255,7 +250,7 @@ ipcMain.handle('keys:models', async (_e, id) => {
     });
     return { ok: true, models };
   } catch (err) {
-    const msg = err.message || String(err);
+    const msg = toErrorMessage(err);
     store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: new Date().toISOString() });
     return { error: msg };
   }
@@ -263,14 +258,14 @@ ipcMain.handle('keys:models', async (_e, id) => {
 
 // 连接测试：先验证连通性（GET /v1/models），再查余额。
 // 余额 ≤ 0 视为"余额不足"，不当作连接正常。
-ipcMain.handle('keys:test', async (_e, id) => {
+ipcMain.handle(CH.keysTest, async (_e, id) => {
   const item = store.getKey(id);
   if (!item) return { error: 'Key 不存在' };
 
   const provider = PROVIDERS[item.provider];
   if (!provider) return { error: `未知提供商: ${item.provider}` };
 
-  const baseUrl = item.baseUrl || provider.defaultBaseUrl;
+  const baseUrl = resolveBaseUrl(item);
   if (!baseUrl) return { error: '缺少 baseUrl' };
 
   const now = new Date().toISOString();
@@ -290,7 +285,7 @@ ipcMain.handle('keys:test', async (_e, id) => {
       modelCount = (json.data || []).length;
     } catch { /* 非 JSON 也算连通正常 */ }
   } catch (err) {
-    const msg = err.message || String(err);
+    const msg = toErrorMessage(err);
     store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: now });
     return { ok: false, error: msg };
   }
@@ -324,7 +319,7 @@ ipcMain.handle('keys:test', async (_e, id) => {
 
 // ────────────────────── 聚合代理服务器 ──────────────────────
 
-ipcMain.handle('server:start', async (_e, port) => {
+ipcMain.handle(CH.serverStart, async (_e, port) => {
   const usePort = port || store.getProxyPort();
   try {
     await proxy.startServer(usePort);
@@ -335,24 +330,24 @@ ipcMain.handle('server:start', async (_e, port) => {
   }
 });
 
-ipcMain.handle('server:stop', async () => {
+ipcMain.handle(CH.serverStop, async () => {
   await proxy.stopServer();
   return { ok: true, ...proxy.getServerStatus() };
 });
 
-ipcMain.handle('server:status', () => proxy.getServerStatus());
+ipcMain.handle(CH.serverStatus, () => proxy.getServerStatus());
 
-ipcMain.handle('server:getUnifiedKey', () => store.getUnifiedKey());
+ipcMain.handle(CH.serverGetUnifiedKey, () => store.getUnifiedKey());
 
-ipcMain.handle('server:regenerateKey', () => store.regenerateUnifiedKey());
+ipcMain.handle(CH.serverRegenerateKey, () => store.regenerateUnifiedKey());
 
-ipcMain.handle('server:getPort', () => store.getProxyPort());
+ipcMain.handle(CH.serverGetPort, () => store.getProxyPort());
 
 // ────────────────────── 模型路由优先级 ──────────────────────
 
-ipcMain.handle('routes:get', () => store.getModelRoutes());
-ipcMain.handle('routes:set', (_e, modelId, keyId) => store.setModelRoute(modelId, keyId));
-ipcMain.handle('routes:clear', () => store.clearModelRoutes());
+ipcMain.handle(CH.routesGet, () => store.getModelRoutes());
+ipcMain.handle(CH.routesSet, (_e, modelId, keyId) => store.setModelRoute(modelId, keyId));
+ipcMain.handle(CH.routesClear, () => store.clearModelRoutes());
 
 // ────────────────────── 自动更新 ──────────────────────
 
@@ -361,7 +356,7 @@ let downloadedInstallerPath = null;
 
 function sendUpdateStatus() {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('update:status', updateInfo);
+    mainWindow.webContents.send(CH.updateStatus, updateInfo);
   }
 }
 
@@ -369,6 +364,7 @@ function sendUpdateStatus() {
  * 用 Node.js https 模块发起 GET 请求（自动跟随重定向，跳过证书验证）。
  * 不用 fetch，因为 Electron 主进程的 fetch 不受 setCertificateVerifyProc 影响，
  * 在证书链不完整的环境下会失败。
+ * options.onData(chunk) 可选：流式接收数据块（用于下载进度回调）。
  */
 function httpsGet(url, options = {}, redirectCount = 0) {
   return new Promise((resolve, reject) => {
@@ -389,6 +385,10 @@ function httpsGet(url, options = {}, redirectCount = 0) {
         res.resume();
         httpsGet(res.headers.location, options, redirectCount + 1).then(resolve).catch(reject);
         return;
+      }
+      // 流式回调（下载场景）
+      if (options.onData) {
+        res.on('data', (chunk) => options.onData(chunk));
       }
       clearTimeout(timer);
       resolve(res);
@@ -455,86 +455,46 @@ async function fetchLatestNightly() {
 }
 
 /**
- * 用 Node.js https 模块下载安装包（自动跟随重定向，跳过证书验证），带进度回调。
+ * 用 httpsGet 下载安装包（复用重定向 + 跳过证书逻辑），带进度回调。
  */
-function downloadInstaller(assetUrl, totalSize) {
-  return new Promise((resolve, reject) => {
-    const tmpDir = os.tmpdir();
-    const fileName = `keyhub-update-${Date.now()}.exe`;
-    const filePath = path.join(tmpDir, fileName);
-    const fileStream = fs.createWriteStream(filePath);
-    let received = 0;
-    let timer = null;
-    let settled = false;
+async function downloadInstaller(assetUrl, totalSize) {
+  const tmpDir = os.tmpdir();
+  const fileName = `keyhub-update-${Date.now()}.exe`;
+  const filePath = path.join(tmpDir, fileName);
+  const fileStream = fs.createWriteStream(filePath);
+  let received = 0;
 
-    const fail = (err) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      reject(err);
-    };
-
-    const done = () => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      downloadedInstallerPath = filePath;
-      resolve(filePath);
-    };
-
-    const request = (url, redirectCount = 0) => {
-      if (redirectCount > 5) {
-        fail(new Error('重定向次数过多'));
-        return;
+  const res = await httpsGet(assetUrl, {
+    headers: { 'User-Agent': 'keyhub-updater' },
+    timeout: 300000,
+    onData: (chunk) => {
+      fileStream.write(chunk);
+      received += chunk.length;
+      const contentLength = totalSize || parseInt(res.headers['content-length'] || '0', 10);
+      if (contentLength > 0) {
+        const pct = Math.round((received / contentLength) * 100);
+        updateInfo = { ...updateInfo, progress: pct };
+        sendUpdateStatus();
       }
-
-      timer = setTimeout(() => fail(new Error('下载超时')), 300000);
-
-      const req = https.get(url, {
-        headers: { 'User-Agent': 'keyhub-updater' },
-        rejectUnauthorized: false,
-      }, (res) => {
-        // 跟随重定向
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          clearTimeout(timer);
-          res.resume();
-          request(res.headers.location, redirectCount + 1);
-          return;
-        }
-
-        if (res.statusCode !== 200) {
-          fail(new Error(`下载失败 HTTP ${res.statusCode}`));
-          return;
-        }
-
-        const contentLength = totalSize || parseInt(res.headers['content-length'] || '0', 10);
-
-        res.on('data', (chunk) => {
-          fileStream.write(chunk);
-          received += chunk.length;
-          if (contentLength > 0) {
-            const pct = Math.round((received / contentLength) * 100);
-            updateInfo = { ...updateInfo, progress: pct };
-            sendUpdateStatus();
-          }
-        });
-
-        res.on('end', () => {
-          fileStream.end();
-        });
-
-        fileStream.on('finish', done);
-        fileStream.on('error', fail);
-      });
-
-      req.on('error', fail);
-    };
-
-    request(assetUrl);
+    },
   });
+
+  if (res.statusCode !== 200) {
+    throw new Error(`下载失败 HTTP ${res.statusCode}`);
+  }
+
+  // 等待文件写入完成
+  await new Promise((resolve, reject) => {
+    fileStream.on('finish', resolve);
+    fileStream.on('error', reject);
+    fileStream.end();
+  });
+
+  downloadedInstallerPath = filePath;
+  return filePath;
 }
 
-ipcMain.handle('update:check', async () => {
+ipcMain.handle(CH.updateCheck, async () => {
   try {
     updateInfo = { ...updateInfo, checking: true, error: null };
     sendUpdateStatus();
@@ -567,14 +527,14 @@ ipcMain.handle('update:check', async () => {
     sendUpdateStatus();
     return { ok: true };
   } catch (err) {
-    const msg = err && err.name === 'AbortError' ? '请求超时' : (String(err.message || err));
+    const msg = toErrorMessage(err);
     updateInfo = { ...updateInfo, checking: false, error: msg };
     sendUpdateStatus();
     return { ok: false, error: msg };
   }
 });
 
-ipcMain.handle('update:install', () => {
+ipcMain.handle(CH.updateInstall, () => {
   if (!downloadedInstallerPath) return { ok: false, error: '安装包未下载' };
   // 用 shell.openPath 启动 NSIS 安装包（会触发 UAC 提权），
   // 延迟退出让安装程序有时间启动
@@ -586,4 +546,4 @@ ipcMain.handle('update:install', () => {
   return { ok: true };
 });
 
-ipcMain.handle('update:getVersion', () => app.getVersion());
+ipcMain.handle(CH.updateGetVersion, () => app.getVersion());
