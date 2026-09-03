@@ -142,7 +142,14 @@ function getCandidateKeys(reqBody) {
 
   let model = null;
   try {
-    const parsed = typeof reqBody === 'string' ? JSON.parse(reqBody) : reqBody;
+    let parsed;
+    if (typeof reqBody === 'string') {
+      parsed = JSON.parse(reqBody);
+    } else if (Buffer.isBuffer(reqBody)) {
+      parsed = JSON.parse(reqBody.toString('utf8'));
+    } else {
+      parsed = reqBody;
+    }
     model = parsed && parsed.model;
   } catch {
     // body 不是 JSON，fallback 到全部 Key
@@ -237,7 +244,7 @@ async function handleChatCompletions(req, res, body) {
   sendJson(res, 502, {
     error: {
       message: `所有 API Key 均不可用。最后错误: ${lastError || '未知错误'}`,
-      type: 'upstream_error',
+      type: 'server_error',
     },
   });
 }
@@ -336,7 +343,7 @@ async function handleMessages(req, res, body) {
 
   sendJson(res, 502, {
     error: {
-      type: 'upstream_error',
+      type: 'server_error',
       message: `所有 API Key 均不可用。最后错误: ${lastError || '未知错误'}`,
     },
   });
@@ -386,6 +393,68 @@ async function handleModels(req, res) {
   }
 
   sendJson(res, 200, { object: 'list', data: merged });
+}
+
+// ─── 单个模型查询 ───
+
+function handleModelDetail(req, res, modelId) {
+  ensureRouteMapFresh();
+  if (routeMapReady && modelRouteMap.has(modelId)) {
+    return sendJson(res, 200, { id: modelId, object: 'model', owned_by: 'keyhub' });
+  }
+  sendJson(res, 404, { error: { message: `模型不存在: ${modelId}`, type: 'invalid_request_error' } });
+}
+
+// ─── 通用转发（带故障转移，供 images/audio/moderations/count_tokens 等复用） ───
+
+async function handleForward(method, upstreamPath, reqBody, reqHeaders, res) {
+  const keys = getCandidateKeys(reqBody);
+  if (keys.length === 0) {
+    return sendJson(res, 503, { error: { message: '没有可用的 API Key，请先添加', type: 'server_error' } });
+  }
+
+  let lastError = null;
+
+  for (const keyEntry of keys) {
+    const base = resolveBaseUrl(keyEntry);
+    if (!base) continue;
+
+    try {
+      const upstreamRes = await tryUpstream(keyEntry, method, upstreamPath, reqBody, reqHeaders);
+
+      if (upstreamRes.ok) {
+        relayResponse(res, upstreamRes);
+        return;
+      }
+
+      if (upstreamRes.status === 401 || upstreamRes.status === 403) {
+        lastError = `${keyEntry.name}: 鉴权失败(${upstreamRes.status})`;
+        continue;
+      }
+
+      if (upstreamRes.status === 429 || upstreamRes.status >= 500) {
+        const errText = await upstreamRes.text().catch(() => '');
+        lastError = `${keyEntry.name}: 上游错误(${upstreamRes.status}) ${errText.slice(0, 200)}`;
+        continue;
+      }
+
+      // 其他 4xx —— 可能该上游不支持此模型/功能，跳过试下一个
+      const errText = await upstreamRes.text().catch(() => '');
+      lastError = `${keyEntry.name}: HTTP ${upstreamRes.status} ${errText.slice(0, 200)}`;
+      continue;
+    } catch (err) {
+      const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
+      lastError = `${keyEntry.name}: ${msg}`;
+      continue;
+    }
+  }
+
+  sendJson(res, 502, {
+    error: {
+      message: `所有 API Key 均不可用。最后错误: ${lastError || '未知错误'}`,
+      type: 'server_error',
+    },
+  });
 }
 
 // ─── 响应透传 ───
@@ -445,6 +514,8 @@ function relayRawResponse(res, status, upstreamHeaders, bodyText) {
 
 // ─── HTTP 请求处理 ───
 
+const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB
+
 function handleRequest(req, res) {
   // CORS 支持
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -462,23 +533,84 @@ function handleRequest(req, res) {
   }
 
   const url = new URL(req.url, `http://127.0.0.1:${currentPort}`);
-  const pathname = url.pathname;
+  // trailing slash 容错
+  const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
-  // 收集请求体
+  // 收集请求体（带 size 限制）
   const chunks = [];
-  req.on('data', (chunk) => chunks.push(chunk));
+  let bodySize = 0;
+  let tooLarge = false;
+
+  req.on('data', (chunk) => {
+    if (tooLarge) return;
+    bodySize += chunk.length;
+    if (bodySize > MAX_BODY_SIZE) {
+      tooLarge = true;
+      if (!res.headersSent) {
+        sendJson(res, 413, { error: { message: '请求体过大（超过 10MB 限制）', type: 'invalid_request_error' } });
+      }
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+
   req.on('end', async () => {
-    const body = chunks.length > 0 ? Buffer.concat(chunks) : null;
+    if (tooLarge) return;
+
+    const rawBody = chunks.length > 0 ? Buffer.concat(chunks) : null;
+
+    // POST 端点：尝试解析 JSON 并验证必填字段
+    let parsedBody = null;
+    if (rawBody && req.method === 'POST') {
+      try {
+        parsedBody = JSON.parse(rawBody.toString('utf8'));
+      } catch {
+        return sendJson(res, 400, { error: { message: '请求体不是有效的 JSON', type: 'invalid_request_error' } });
+      }
+    }
+
+    // 验证必填字段
+    if (parsedBody) {
+      const requiresModel = ['/v1/chat/completions', '/v1/embeddings', '/v1/images/generations',
+        '/v1/audio/speech', '/v1/moderations'].includes(pathname);
+      if (requiresModel && !parsedBody.model) {
+        return sendJson(res, 400, { error: { message: '缺少必填字段: model', type: 'invalid_request_error', param: 'model' } });
+      }
+      if (pathname === '/v1/chat/completions' && !parsedBody.messages) {
+        return sendJson(res, 400, { error: { message: '缺少必填字段: messages', type: 'invalid_request_error', param: 'messages' } });
+      }
+      if (pathname === '/v1/messages' && !parsedBody.messages) {
+        return sendJson(res, 400, { error: { message: '缺少必填字段: messages', type: 'invalid_request_error', param: 'messages' } });
+      }
+      if (pathname === '/v1/embeddings' && !parsedBody.input) {
+        return sendJson(res, 400, { error: { message: '缺少必填字段: input', type: 'invalid_request_error', param: 'input' } });
+      }
+    }
 
     try {
       if (pathname === '/v1/chat/completions' && req.method === 'POST') {
-        await handleChatCompletions(req, res, body);
+        await handleChatCompletions(req, res, rawBody);
       } else if (pathname === '/v1/messages' && req.method === 'POST') {
-        await handleMessages(req, res, body);
+        await handleMessages(req, res, rawBody);
+      } else if (pathname === '/v1/messages/count_tokens' && req.method === 'POST') {
+        await handleForward('POST', 'v1/messages/count_tokens', rawBody, req.headers, res);
       } else if (pathname === '/v1/embeddings' && req.method === 'POST') {
-        await handleEmbeddings(req, res, body);
+        await handleEmbeddings(req, res, rawBody);
       } else if (pathname === '/v1/models' && req.method === 'GET') {
         await handleModels(req, res);
+      } else if (pathname.startsWith('/v1/models/') && req.method === 'GET') {
+        handleModelDetail(req, res, pathname.replace('/v1/models/', ''));
+      } else if (pathname === '/v1/images/generations' && req.method === 'POST') {
+        await handleForward('POST', 'v1/images/generations', rawBody, req.headers, res);
+      } else if (pathname === '/v1/audio/speech' && req.method === 'POST') {
+        await handleForward('POST', 'v1/audio/speech', rawBody, req.headers, res);
+      } else if (pathname === '/v1/audio/transcriptions' && req.method === 'POST') {
+        await handleForward('POST', 'v1/audio/transcriptions', rawBody, req.headers, res);
+      } else if (pathname === '/v1/moderations' && req.method === 'POST') {
+        await handleForward('POST', 'v1/moderations', rawBody, req.headers, res);
+      } else if ((pathname === '/' || pathname === '/health') && req.method === 'GET') {
+        sendJson(res, 200, { status: 'ok', service: 'KeyHub Proxy' });
       } else {
         sendJson(res, 404, { error: { message: `未知路径: ${pathname}`, type: 'invalid_request_error' } });
       }
@@ -488,7 +620,7 @@ function handleRequest(req, res) {
   });
 
   req.on('error', () => {
-    if (!res.headersSent) sendJson(res, 400, { error: { message: '请求错误', type: 'server_error' } });
+    if (!res.headersSent) sendJson(res, 400, { error: { message: '请求错误', type: 'invalid_request_error' } });
   });
 }
 

@@ -89,10 +89,14 @@ ipcMain.handle('providers:list', () => PROVIDER_LIST);
 ipcMain.handle('keys:list', () => store.getAllKeys());
 
 // 新增
-ipcMain.handle('keys:add', (_e, entry) => store.addKey(entry));
+ipcMain.handle('keys:add', async (_e, entry) => {
+  const result = store.addKey(entry);
+  proxy.refreshRouteMap();
+  return result;
+});
 
 // 批量新增（同一平台多个 Key，自动去重 + 连续编号命名）
-ipcMain.handle('keys:addBatch', (_e, payload) => {
+ipcMain.handle('keys:addBatch', async (_e, payload) => {
   const {
     provider,
     baseUrl,
@@ -113,17 +117,27 @@ ipcMain.handle('keys:addBatch', (_e, payload) => {
     customJsonPath,
     customCurrency,
   }));
-  return store.addKeys(entries, prefix);
+  const result = store.addKeys(entries, prefix);
+  proxy.refreshRouteMap();
+  return result;
 });
 
 // 更新
 ipcMain.handle('keys:update', (_e, id, patch) => store.updateKey(id, patch));
 
 // 删除
-ipcMain.handle('keys:delete', (_e, id) => store.deleteKey(id));
+ipcMain.handle('keys:delete', async (_e, id) => {
+  const result = store.deleteKey(id);
+  proxy.refreshRouteMap();
+  return result;
+});
 
 // 一键去重（按 apiKey 去除重复，保留首次配置）
-ipcMain.handle('keys:dedup', () => store.dedupKeys());
+ipcMain.handle('keys:dedup', async () => {
+  const result = store.dedupKeys();
+  proxy.refreshRouteMap();
+  return result;
+});
 
 // 查询单个 Key 余额
 ipcMain.handle('keys:query', async (_e, id) => {
