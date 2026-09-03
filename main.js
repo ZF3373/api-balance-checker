@@ -91,11 +91,39 @@ ipcMain.handle('keys:list', () => store.getAllKeys());
 // 新增
 ipcMain.handle('keys:add', (_e, entry) => store.addKey(entry));
 
+// 批量新增（同一平台多个 Key，自动去重 + 连续编号命名）
+ipcMain.handle('keys:addBatch', (_e, payload) => {
+  const {
+    provider,
+    baseUrl,
+    apiKeys,
+    namePrefix,
+    customBalancePath,
+    customJsonPath,
+    customCurrency,
+  } = payload;
+  const p = PROVIDERS[provider];
+  // 前缀留空时回退到平台名，保证名称可读
+  const prefix = (namePrefix && namePrefix.trim()) || (p ? p.name : provider);
+  const entries = (apiKeys || []).map((key) => ({
+    provider,
+    baseUrl: baseUrl || '',
+    apiKey: key,
+    customBalancePath,
+    customJsonPath,
+    customCurrency,
+  }));
+  return store.addKeys(entries, prefix);
+});
+
 // 更新
 ipcMain.handle('keys:update', (_e, id, patch) => store.updateKey(id, patch));
 
 // 删除
 ipcMain.handle('keys:delete', (_e, id) => store.deleteKey(id));
+
+// 一键去重（按 apiKey 去除重复，保留首次配置）
+ipcMain.handle('keys:dedup', () => store.dedupKeys());
 
 // 查询单个 Key 余额
 ipcMain.handle('keys:query', async (_e, id) => {

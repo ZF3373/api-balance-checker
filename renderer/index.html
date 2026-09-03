@@ -15,6 +15,7 @@
     <div class="actions">
       <button id="check-update" class="btn btn-icon" title="检查更新">🔄</button>
       <button id="refresh-all" class="btn btn-primary">↻ 刷新全部</button>
+      <button id="dedup-keys" class="btn" title="扫描并删除重复的 API Key">🧹 去重</button>
       <button id="add-key" class="btn">+ 添加 Key</button>
     </div>
   </header>
@@ -80,9 +81,10 @@
         <button class="modal-close" id="modal-close">✕</button>
       </div>
       <form id="key-form" class="modal-body">
-        <div class="field">
-          <label for="f-name">名称</label>
-          <input type="text" id="f-name" placeholder="如：DeepSeek 主号" required />
+        <!-- 模式切换 -->
+        <div class="mode-tabs" id="mode-tabs">
+          <button type="button" class="mode-tab active" data-mode="single">单个添加</button>
+          <button type="button" class="mode-tab" data-mode="batch">批量导入</button>
         </div>
 
         <div class="field">
@@ -96,9 +98,30 @@
           <span id="f-baseurl-hint" class="hint"></span>
         </div>
 
-        <div class="field">
-          <label for="f-apikey">API Key</label>
-          <input type="password" id="f-apikey" placeholder="sk-..." required />
+        <!-- 单个模式字段 -->
+        <div id="single-fields" class="mode-fields">
+          <div class="field">
+            <label for="f-name">名称</label>
+            <input type="text" id="f-name" placeholder="如：DeepSeek 主号" />
+          </div>
+          <div class="field">
+            <label for="f-apikey">API Key</label>
+            <input type="password" id="f-apikey" placeholder="sk-..." />
+          </div>
+        </div>
+
+        <!-- 批量模式字段 -->
+        <div id="batch-fields" class="mode-fields hidden">
+          <div class="field">
+            <label for="f-name-prefix">名称前缀（可选）</label>
+            <input type="text" id="f-name-prefix" placeholder="留空则用平台名，如 DeepSeek" />
+            <span class="hint">导入后自动编号：前缀-1、前缀-2 …</span>
+          </div>
+          <div class="field">
+            <label for="f-apikeys">API Keys（每行一个）</label>
+            <textarea id="f-apikeys" rows="6" placeholder="sk-aaa&#10;sk-bbb&#10;sk-ccc"></textarea>
+            <span class="hint" id="batch-count"></span>
+          </div>
         </div>
 
         <div id="custom-fields" class="custom-fields hidden">

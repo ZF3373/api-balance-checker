@@ -99,6 +99,82 @@ function deleteKey(id) {
   return true;
 }
 
+/**
+ * 一键去重：按 apiKey 去除重复条目，保留每个 Key 的首次配置。
+ * 与批量导入的去重口径一致（仅按 apiKey 判定）。
+ * @returns {{ removed: number, total: number }}
+ */
+function dedupKeys() {
+  const data = load();
+  const seen = new Set();
+  const before = data.keys.length;
+  data.keys = data.keys.filter((k) => {
+    if (seen.has(k.apiKey)) return false;
+    seen.add(k.apiKey);
+    return true;
+  });
+  const removed = before - data.keys.length;
+  if (removed > 0) save(data);
+  return { removed, total: data.keys.length };
+}
+
+/**
+ * 批量新增 Key（同一平台多个 Key 一次性导入）。
+ * 按 apiKey 去重：与已有 Key 重复的自动跳过，新增的连续编号命名。
+ * 编号会接续同名前缀的最大编号，避免多次导入产生重名。
+ * 一次读改存，避免逐条 IO。
+ * @param {Array} entries  不含 name，由本函数按 namePrefix 编号
+ * @param {string} namePrefix 名称前缀，编号后形如「前缀-1」
+ * @returns {{ added: number, skipped: number }}
+ */
+function addKeys(entries, namePrefix) {
+  const data = load();
+  const existing = new Set(data.keys.map((k) => k.apiKey));
+
+  // 找出已有同名前缀的最大编号，新导入从下一个编号开始
+  const prefixPattern = new RegExp(
+    '^' + String(namePrefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-(\\d+)$',
+  );
+  let idx = 0;
+  for (const k of data.keys) {
+    const m = (k.name || '').match(prefixPattern);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > idx) idx = n;
+    }
+  }
+
+  let skipped = 0;
+  const added = [];
+  for (const entry of entries) {
+    if (existing.has(entry.apiKey)) {
+      skipped += 1;
+      continue;
+    }
+    idx += 1;
+    const item = {
+      id: genId(),
+      name: `${namePrefix}-${idx}`,
+      provider: entry.provider,
+      baseUrl: entry.baseUrl || '',
+      apiKey: entry.apiKey,
+      customBalancePath: entry.customBalancePath || '',
+      customJsonPath: entry.customJsonPath || '',
+      customCurrency: entry.customCurrency || '',
+      lastBalance: null,
+      lastCurrency: null,
+      lastQueryTime: null,
+      lastError: null,
+      lastStatus: null,
+    };
+    data.keys.push(item);
+    existing.add(entry.apiKey);
+    added.push(item);
+  }
+  save(data);
+  return { added: added.length, skipped };
+}
+
 function setQueryResult(id, result) {
   return updateKey(id, {
     lastBalance: result.balance,
@@ -146,8 +222,10 @@ module.exports = {
   getAllKeys,
   getKey,
   addKey,
+  addKeys,
   updateKey,
   deleteKey,
+  dedupKeys,
   setQueryResult,
   getSettings,
   saveSettings,

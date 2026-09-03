@@ -780,6 +780,78 @@ body {
   margin-top: 4px;
 }
 
+/* 全局隐藏工具类 */
+.hidden {
+  display: none;
+}
+
+/* ─── 模式切换 tab ─── */
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+
+.mode-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--t);
+  font-family: inherit;
+}
+
+.mode-tab:hover {
+  color: var(--text-secondary);
+  background: var(--card);
+}
+
+.mode-tab.active {
+  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  color: #fff;
+  box-shadow: 0 2px 8px var(--primary-glow);
+}
+
+/* 模式字段容器 */
+.mode-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* textarea 复用 input 风格 */
+.field textarea {
+  padding: 10px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  background: var(--bg);
+  color: var(--text);
+  transition: all var(--t);
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.field textarea::placeholder {
+  color: var(--text-dim);
+}
+
+.field textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+  background: var(--card);
+}
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;

@@ -9,8 +9,10 @@ contextBridge.exposeInMainWorld('api', {
   keys: {
     list: () => ipcRenderer.invoke('keys:list'),
     add: (entry) => ipcRenderer.invoke('keys:add', entry),
+    addBatch: (payload) => ipcRenderer.invoke('keys:addBatch', payload),
     update: (id, patch) => ipcRenderer.invoke('keys:update', id, patch),
     remove: (id) => ipcRenderer.invoke('keys:delete', id),
+    dedup: () => ipcRenderer.invoke('keys:dedup'),
     query: (id) => ipcRenderer.invoke('keys:query', id),
     queryAll: () => ipcRenderer.invoke('keys:queryAll'),
     models: (id) => ipcRenderer.invoke('keys:models', id),

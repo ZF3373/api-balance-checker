@@ -8,6 +8,7 @@ let queryingIds = new Set();
 let busyIds = new Set();
 let visibleKeyIds = new Set();
 let proxyRunning = false;
+let currentMode = 'single'; // 'single' | 'batch'
 
 // ─── DOM ───
 const $ = (id) => document.getElementById(id);
@@ -19,6 +20,11 @@ const providerSelect = $('f-provider');
 const baseUrlInput = $('f-baseurl');
 const baseUrlHint = $('f-baseurl-hint');
 const customFields = $('custom-fields');
+const modeTabs = $('mode-tabs');
+const singleFields = $('single-fields');
+const batchFields = $('batch-fields');
+const apikeysTextarea = $('f-apikeys');
+const batchCount = $('batch-count');
 
 // ─── Toast 通知 ───
 function showToast(msg, type = 'info', duration = 3000) {
@@ -228,11 +234,20 @@ function bindEvents() {
   $('add-key').addEventListener('click', () => openModal());
   $('empty-add').addEventListener('click', () => openModal());
   $('refresh-all').addEventListener('click', refreshAll);
+  $('dedup-keys').addEventListener('click', dedupKeys);
   $('check-update').addEventListener('click', checkUpdate);
 
   $('modal-close').addEventListener('click', closeModal);
   $('modal-cancel').addEventListener('click', closeModal);
   modal.querySelector('.modal-backdrop').addEventListener('click', closeModal);
+
+  // 模式切换
+  modeTabs.addEventListener('click', (e) => {
+    const tab = e.target.closest('.mode-tab');
+    if (!tab) return;
+    switchMode(tab.dataset.mode);
+  });
+  apikeysTextarea.addEventListener('input', updateBatchCount);
 
   providerSelect.addEventListener('change', onProviderChange);
   form.addEventListener('submit', onSave);
@@ -286,15 +301,50 @@ function onProviderChange() {
   customFields.classList.toggle('hidden', p.key !== 'custom');
 }
 
+// ─── 批量导入辅助 ───
+
+function switchMode(mode) {
+  currentMode = mode;
+  modeTabs.querySelectorAll('.mode-tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.mode === mode);
+  });
+  singleFields.classList.toggle('hidden', mode !== 'single');
+  batchFields.classList.toggle('hidden', mode !== 'batch');
+  $('modal-save').textContent = mode === 'batch' ? '批量导入' : '保存';
+}
+
+/**
+ * 解析批量输入：按换行/逗号/分号/空白分隔，去空、去重、trim
+ */
+function parseBatchKeys(raw) {
+  const parts = (raw || '')
+    .split(/[\n,;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return [...new Set(parts)];
+}
+
+function updateBatchCount() {
+  const count = parseBatchKeys(apikeysTextarea.value).length;
+  batchCount.textContent = count > 0 ? `检测到 ${count} 个有效 Key` : '';
+}
+
 // ─── 模态框 ───
 function openModal(key = null) {
   editingId = key ? key.id : null;
   $('modal-title').textContent = key ? '编辑 API Key' : '添加 API Key';
 
+  // 编辑模式仅支持单个，隐藏模式切换；新增时显示切换并默认单个
+  modeTabs.classList.toggle('hidden', !!key);
+  switchMode('single');
+
   $('f-name').value = key ? key.name : '';
   providerSelect.value = key ? key.provider : 'deepseek';
   baseUrlInput.value = key ? key.baseUrl : '';
   $('f-apikey').value = key ? key.apiKey : '';
+  $('f-name-prefix').value = '';
+  apikeysTextarea.value = '';
+  updateBatchCount();
   $('f-custom-path').value = key ? key.customBalancePath || '' : '';
   $('f-custom-jsonpath').value = key ? key.customJsonPath || '' : '';
   $('f-custom-currency').value = key ? key.customCurrency || '' : '';
@@ -312,14 +362,51 @@ function closeModal() {
 
 async function onSave(e) {
   e.preventDefault();
+  const provider = providerSelect.value;
+  const baseUrl = baseUrlInput.value.trim();
+  const customBalancePath = $('f-custom-path').value.trim();
+  const customJsonPath = $('f-custom-jsonpath').value.trim();
+  const customCurrency = $('f-custom-currency').value.trim();
+
+  // 批量导入
+  if (currentMode === 'batch' && !editingId) {
+    const apiKeys = parseBatchKeys(apikeysTextarea.value);
+    if (apiKeys.length === 0) {
+      showToast('请输入至少一个 API Key', 'error', 2000);
+      return;
+    }
+    const namePrefix = $('f-name-prefix').value.trim();
+    const result = await window.api.keys.addBatch({
+      provider,
+      baseUrl,
+      apiKeys,
+      namePrefix,
+      customBalancePath,
+      customJsonPath,
+      customCurrency,
+    });
+    if (result.added > 0) {
+      const msg = result.skipped > 0
+        ? `已导入 ${result.added} 个，跳过 ${result.skipped} 个重复`
+        : `已导入 ${result.added} 个 Key`;
+      showToast(msg, 'success', 2500);
+    } else {
+      showToast(`全部 ${result.skipped} 个 Key 均已存在，已跳过`, 'info', 2500);
+    }
+    closeModal();
+    await refreshKeys();
+    return;
+  }
+
+  // 单个添加 / 编辑
   const entry = {
     name: $('f-name').value.trim(),
-    provider: providerSelect.value,
-    baseUrl: baseUrlInput.value.trim(),
+    provider,
+    baseUrl,
     apiKey: $('f-apikey').value.trim(),
-    customBalancePath: $('f-custom-path').value.trim(),
-    customJsonPath: $('f-custom-jsonpath').value.trim(),
-    customCurrency: $('f-custom-currency').value.trim(),
+    customBalancePath,
+    customJsonPath,
+    customCurrency,
   };
 
   if (!entry.name || !entry.apiKey) return;
@@ -522,6 +609,23 @@ async function refreshAll() {
     btn.innerHTML = '↻ 刷新全部';
     await refreshKeys();
   }
+}
+
+// ─── 一键去重 ───
+async function dedupKeys() {
+  if (keys.length === 0) {
+    showToast('没有可去重的 Key', 'info', 1500);
+    return;
+  }
+  showConfirm('将扫描并删除重复的 API Key（保留每个 Key 的首次配置），确认？', async () => {
+    const result = await window.api.keys.dedup();
+    await refreshKeys();
+    if (result.removed > 0) {
+      showToast(`已删除 ${result.removed} 个重复 Key`, 'success', 2500);
+    } else {
+      showToast('未发现重复 Key', 'info', 2000);
+    }
+  });
 }
 
 // ─── 删除 ───
