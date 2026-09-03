@@ -130,10 +130,11 @@ async function handleChatCompletions(req, res, body) {
         continue;
       }
 
-      // 其他 4xx（400/404 等）→ 请求本身有问题，直接返回，不重试
+      // 其他 4xx（400/404 等）—— 多平台聚合时可能是该上游不支持此模型，
+      // 跳过试下一个 Key；若全部 Key 都返回 4xx，最后再返回最后一个错误
       const errText = await upstreamRes.text().catch(() => '');
-      relayRawResponse(res, upstreamRes.status, upstreamRes.headers, errText);
-      return;
+      lastError = `${keyEntry.name}: HTTP ${upstreamRes.status} ${errText.slice(0, 200)}`;
+      continue;
     } catch (err) {
       // 网络错误/超时 → 跳过试下一个
       const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
@@ -183,10 +184,10 @@ async function handleEmbeddings(req, res, body) {
         continue;
       }
 
-      // 其他 4xx 直接返回
+      // 其他 4xx —— 多平台聚合时可能是该上游不支持此模型，跳过试下一个
       const errText = await upstreamRes.text().catch(() => '');
-      relayRawResponse(res, upstreamRes.status, upstreamRes.headers, errText);
-      return;
+      lastError = `${keyEntry.name}: HTTP ${upstreamRes.status} ${errText.slice(0, 200)}`;
+      continue;
     } catch (err) {
       const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
       lastError = `${keyEntry.name}: ${msg}`;
@@ -232,10 +233,10 @@ async function handleMessages(req, res, body) {
         continue;
       }
 
-      // 其他 4xx 直接返回
+      // 其他 4xx —— 多平台聚合时可能是该上游不支持此模型，跳过试下一个
       const errText = await upstreamRes.text().catch(() => '');
-      relayRawResponse(res, upstreamRes.status, upstreamRes.headers, errText);
-      return;
+      lastError = `${keyEntry.name}: HTTP ${upstreamRes.status} ${errText.slice(0, 200)}`;
+      continue;
     } catch (err) {
       const msg = err && err.name === 'AbortError' ? '请求超时' : (err.message || String(err));
       lastError = `${keyEntry.name}: ${msg}`;
