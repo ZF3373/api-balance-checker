@@ -8,6 +8,13 @@ const { PROVIDERS } = require('./providers');
 let server = null;
 let currentPort = null;
 
+// ─── 模型路由表 ───
+// modelId -> [keyEntry, ...] 按插入顺序，代理启动时自动从各 Key 拉取 /v1/models 构建
+let modelRouteMap = new Map();
+let routeMapReady = false;
+let routeMapBuilding = false;
+let routeMapKeyCount = 0; // 构建时的 key 数量，用于检测变化后自动重建
+
 // ─── 鉴权 ───
 
 function timingSafeEqual(a, b) {
@@ -73,6 +80,89 @@ function sendJson(res, status, body) {
   res.end(json);
 }
 
+// ─── 模型路由表构建 ───
+
+/**
+ * 并发拉取所有 Key 的 /v1/models，构建 modelId -> [keyEntry, ...] 路由表。
+ * 单个 Key 失败不影响其他 Key。构建完成后设 routeMapReady = true。
+ */
+async function buildRouteMap() {
+  if (routeMapBuilding) return;
+  routeMapBuilding = true;
+
+  const keys = store.getAllKeys();
+  routeMapKeyCount = keys.length;
+  const newMap = new Map();
+
+  const tasks = keys
+    .filter((k) => resolveBaseUrl(k))
+    .map(async (k) => {
+      try {
+        const res = await tryUpstream(k, 'GET', 'v1/models', null, {});
+        if (!res.ok) return;
+        const json = await res.json();
+        const models = (json.data || []).map((m) => m.id).filter(Boolean);
+        for (const modelId of models) {
+          if (!newMap.has(modelId)) newMap.set(modelId, []);
+          newMap.get(modelId).push(k);
+        }
+      } catch {
+        // 单个 Key 拉取失败，跳过
+      }
+    });
+
+  await Promise.allSettled(tasks);
+  modelRouteMap = newMap;
+  routeMapReady = true;
+  routeMapBuilding = false;
+}
+
+/**
+ * 如果 Key 数量变化（新增/删除/去重），触发路由表重建。
+ * 在请求处理时惰性检测。
+ */
+function ensureRouteMapFresh() {
+  if (!routeMapReady || routeMapBuilding) return;
+  const currentCount = store.getAllKeys().length;
+  if (currentCount !== routeMapKeyCount) {
+    buildRouteMap();
+  }
+}
+
+/**
+ * 根据请求 body 中的 model 字段，返回候选 Key 列表。
+ * 路由表中有该模型 → 返回支持它的 Key（精准路由）；
+ * 路由表未就绪或模型不在表中 → 返回全部 Key（fallback 顺序故障转移）。
+ */
+function getCandidateKeys(reqBody) {
+  const allKeys = store.getAllKeys();
+  ensureRouteMapFresh();
+
+  if (!routeMapReady) return allKeys;
+
+  let model = null;
+  try {
+    const parsed = typeof reqBody === 'string' ? JSON.parse(reqBody) : reqBody;
+    model = parsed && parsed.model;
+  } catch {
+    // body 不是 JSON，fallback 到全部 Key
+  }
+
+  if (model && modelRouteMap.has(model)) {
+    return modelRouteMap.get(model);
+  }
+
+  return allKeys;
+}
+
+/**
+ * 供外部调用的路由表刷新（如添加/删除 Key 后）。
+ */
+function refreshRouteMap() {
+  routeMapReady = false;
+  return buildRouteMap();
+}
+
 // ─── 单次上游转发 ───
 
 async function tryUpstream(keyEntry, method, path, reqBody, reqHeaders, { stream = false } = {}) {
@@ -97,7 +187,7 @@ async function tryUpstream(keyEntry, method, path, reqBody, reqHeaders, { stream
 // ─── chat/completions 转发（带故障转移） ───
 
 async function handleChatCompletions(req, res, body) {
-  const keys = store.getAllKeys();
+  const keys = getCandidateKeys(body);
   if (keys.length === 0) {
     return sendJson(res, 503, { error: { message: '没有可用的 API Key，请先添加', type: 'server_error' } });
   }
@@ -155,7 +245,7 @@ async function handleChatCompletions(req, res, body) {
 // ─── embeddings 转发（带故障转移） ───
 
 async function handleEmbeddings(req, res, body) {
-  const keys = store.getAllKeys();
+  const keys = getCandidateKeys(body);
   if (keys.length === 0) {
     return sendJson(res, 503, { error: { message: '没有可用的 API Key', type: 'server_error' } });
   }
@@ -203,7 +293,7 @@ async function handleEmbeddings(req, res, body) {
 // ─── Anthropic Messages 转发（带故障转移） ───
 
 async function handleMessages(req, res, body) {
-  const keys = store.getAllKeys();
+  const keys = getCandidateKeys(body);
   if (keys.length === 0) {
     return sendJson(res, 503, { error: { message: '没有可用的 API Key，请先添加', type: 'server_error' } });
   }
@@ -252,9 +342,18 @@ async function handleMessages(req, res, body) {
   });
 }
 
-// ─── models 聚合（并发查询所有上游，去重合并） ───
+// ─── models 聚合（路由表就绪时走缓存，否则实时查询） ───
 
 async function handleModels(req, res) {
+  ensureRouteMapFresh();
+
+  // 路由表就绪 → 直接从内存返回去重模型列表（零上游请求）
+  if (routeMapReady) {
+    const data = [...modelRouteMap.keys()].sort().map((id) => ({ id, object: 'model' }));
+    return sendJson(res, 200, { object: 'list', data });
+  }
+
+  // 路由表未就绪 → 实时并发查询所有上游（fallback）
   const keys = store.getAllKeys();
   if (keys.length === 0) {
     return sendJson(res, 200, { object: 'list', data: [] });
@@ -408,6 +507,8 @@ function startServer(port) {
     });
     server.listen(port, '127.0.0.1', () => {
       currentPort = port;
+      // 异步构建模型路由表，不阻塞端口监听
+      buildRouteMap();
       resolve({ ok: true, port });
     });
   });
@@ -422,6 +523,9 @@ function stopServer() {
     server.close(() => {
       server = null;
       currentPort = null;
+      modelRouteMap = new Map();
+      routeMapReady = false;
+      routeMapKeyCount = 0;
       resolve({ ok: true });
     });
     // 强制销毁残留连接
@@ -441,4 +545,5 @@ module.exports = {
   startServer,
   stopServer,
   getServerStatus,
+  refreshRouteMap,
 };
