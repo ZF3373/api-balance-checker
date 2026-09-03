@@ -11,6 +11,8 @@ let proxyRunning = false;
 let currentMode = 'single'; // 'single' | 'batch'
 let modelsSearchQuery = '';
 let fetchingAllModels = false;
+let modelRoutes = {}; // { modelId: keyId } 用户设置的模型路由优先级
+let routeMenuOpen = null; // 当前打开的路由选择菜单的 modelId
 
 // ─── DOM ───
 const $ = (id) => document.getElementById(id);
@@ -85,6 +87,7 @@ function showConfirm(text, onConfirm) {
 // ─── 初始化 ───
 async function init() {
   providers = await window.api.providers.list();
+  modelRoutes = await window.api.routes.get();
   renderProviderOptions();
   await refreshKeys();
   await initProxy();
@@ -513,13 +516,14 @@ function renderModelsPanel() {
   panel.style.display = '';
 
   // 汇总所有 Key 的模型，记录每个模型来自哪些 Key
-  const modelMap = new Map(); // model -> [{ name, provider }]
+  const modelMap = new Map(); // model -> [{ id, name, provider }]
   keys.forEach((k) => {
     if (k.lastModels && k.lastModels.length > 0) {
       k.lastModels.forEach((m) => {
         if (!modelMap.has(m)) modelMap.set(m, []);
         const provider = providers.find((p) => p.key === k.provider);
         modelMap.get(m).push({
+          id: k.id,
           name: k.name,
           provider: provider ? provider.name : k.provider,
         });
@@ -549,11 +553,73 @@ function renderModelsPanel() {
   body.innerHTML = models
     .map((m) => {
       const sources = modelMap.get(m);
-      const sourceNames = sources.map((s) => `${escapeHtml(s.name)}(${escapeHtml(s.provider)})`).join(', ');
+      const sourceNames = sources.map((s) => `${s.name}(${s.provider})`).join(', ');
       const sourceCount = sources.length;
-      return `<span class="model-chip-lg" title="来自 ${sourceNames}">${escapeHtml(m)}<span class="model-chip-count">${sourceCount}</span></span>`;
+      const preferredKeyId = modelRoutes[m];
+      const preferredKey = preferredKeyId ? sources.find((s) => s.id === preferredKeyId) : null;
+      const hasRoute = !!preferredKey;
+
+      const chipClass = hasRoute ? 'model-chip-lg model-chip-routed' : 'model-chip-lg';
+      const routeLabel = hasRoute
+        ? `<span class="model-route-badge" title="优先使用: ${escapeHtml(preferredKey.name)}">${escapeHtml(preferredKey.name)}</span>`
+        : '';
+
+      // 路由选择下拉菜单（仅当前展开的模型渲染）
+      let menuHtml = '';
+      if (routeMenuOpen === m) {
+        const options = sources
+          .map((s) => {
+            const isCurrent = s.id === preferredKeyId;
+            return `<div class="route-option${isCurrent ? ' route-option-active' : ''}" data-model="${escapeHtml(m)}" data-keyid="${escapeHtml(s.id)}" data-action="select">${escapeHtml(s.name)} <span class="route-option-provider">${escapeHtml(s.provider)}</span></div>`;
+          })
+          .join('');
+        menuHtml = `
+          <div class="route-menu" onclick="event.stopPropagation()">
+            <div class="route-menu-title">选择优先 Key</div>
+            ${options}
+            ${hasRoute ? `<div class="route-option route-option-clear" data-model="${escapeHtml(m)}" data-action="clear">清除优先级</div>` : ''}
+          </div>
+        `;
+      }
+
+      return `<span class="${chipClass}" data-model="${escapeHtml(m)}" data-action="toggle-menu" title="来自 ${escapeHtml(sourceNames)}">${escapeHtml(m)}<span class="model-chip-count">${sourceCount}</span>${routeLabel}${menuHtml}</span>`;
     })
     .join('');
+
+  // 绑定 chip 点击事件（切换菜单）
+  body.querySelectorAll('[data-action="toggle-menu"]').forEach((chip) => {
+    chip.addEventListener('click', (e) => {
+      const model = chip.dataset.model;
+      routeMenuOpen = routeMenuOpen === model ? null : model;
+      renderModelsPanel();
+    });
+  });
+
+  // 绑定路由选项点击事件
+  body.querySelectorAll('[data-action="select"]').forEach((opt) => {
+    opt.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const model = opt.dataset.model;
+      const keyId = opt.dataset.keyid;
+      await window.api.routes.set(model, keyId);
+      modelRoutes = await window.api.routes.get();
+      routeMenuOpen = null;
+      renderModelsPanel();
+      showToast('已设置优先 Key', 'success', 1500);
+    });
+  });
+
+  body.querySelectorAll('[data-action="clear"]').forEach((opt) => {
+    opt.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const model = opt.dataset.model;
+      await window.api.routes.set(model, null);
+      modelRoutes = await window.api.routes.get();
+      routeMenuOpen = null;
+      renderModelsPanel();
+      showToast('已清除优先级', 'info', 1500);
+    });
+  });
 }
 
 // ─── 获取所有 Key 的可用模型 ───

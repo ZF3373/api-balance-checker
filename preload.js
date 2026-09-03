@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('api', {
     regenerateKey: () => ipcRenderer.invoke('server:regenerateKey'),
     getPort: () => ipcRenderer.invoke('server:getPort'),
   },
+  routes: {
+    get: () => ipcRenderer.invoke('routes:get'),
+    set: (modelId, keyId) => ipcRenderer.invoke('routes:set', modelId, keyId),
+    clear: () => ipcRenderer.invoke('routes:clear'),
+  },
   updater: {
     check: () => ipcRenderer.invoke('update:check'),
     install: () => ipcRenderer.invoke('update:install'),

@@ -133,12 +133,11 @@ function ensureRouteMapFresh() {
  * 根据请求 body 中的 model 字段，返回候选 Key 列表。
  * 路由表中有该模型 → 返回支持它的 Key（精准路由）；
  * 路由表未就绪或模型不在表中 → 返回全部 Key（fallback 顺序故障转移）。
+ * 用户在 UI 中为模型指定的优先 Key 会被排到候选列表最前。
  */
 function getCandidateKeys(reqBody) {
   const allKeys = store.getAllKeys();
   ensureRouteMapFresh();
-
-  if (!routeMapReady) return allKeys;
 
   let model = null;
   try {
@@ -155,11 +154,31 @@ function getCandidateKeys(reqBody) {
     // body 不是 JSON，fallback 到全部 Key
   }
 
-  if (model && modelRouteMap.has(model)) {
-    return modelRouteMap.get(model);
+  let candidates;
+  if (model && routeMapReady && modelRouteMap.has(model)) {
+    candidates = [...modelRouteMap.get(model)];
+  } else {
+    candidates = [...allKeys];
   }
 
-  return allKeys;
+  // 用户指定的优先 Key 排到最前
+  if (model) {
+    const routes = store.getModelRoutes();
+    const preferredKeyId = routes[model];
+    if (preferredKeyId) {
+      const idx = candidates.findIndex((k) => k.id === preferredKeyId);
+      if (idx > 0) {
+        const [preferred] = candidates.splice(idx, 1);
+        candidates.unshift(preferred);
+      } else if (idx === -1) {
+        // 优先 Key 不在候选列表中（可能路由表未含此模型），但从全部 Key 中找到则加入最前
+        const preferredKey = allKeys.find((k) => k.id === preferredKeyId);
+        if (preferredKey) candidates.unshift(preferredKey);
+      }
+    }
+  }
+
+  return candidates;
 }
 
 /**

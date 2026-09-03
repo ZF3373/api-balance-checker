@@ -348,6 +348,12 @@ ipcMain.handle('server:regenerateKey', () => store.regenerateUnifiedKey());
 
 ipcMain.handle('server:getPort', () => store.getProxyPort());
 
+// ────────────────────── 模型路由优先级 ──────────────────────
+
+ipcMain.handle('routes:get', () => store.getModelRoutes());
+ipcMain.handle('routes:set', (_e, modelId, keyId) => store.setModelRoute(modelId, keyId));
+ipcMain.handle('routes:clear', () => store.clearModelRoutes());
+
 // ────────────────────── 自动更新 ──────────────────────
 
 let updateInfo = null; // { version, progress, downloaded, checking, error }

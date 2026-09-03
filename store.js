@@ -217,6 +217,32 @@ function setProxyPort(port) {
   return port;
 }
 
+// ─── 模型路由优先级 ───
+// settings.modelRoutes: { [modelId]: keyId }  用户为每个模型指定的优先 Key
+
+function getModelRoutes() {
+  return load().settings.modelRoutes || {};
+}
+
+function setModelRoute(modelId, keyId) {
+  const data = load();
+  if (!data.settings.modelRoutes) data.settings.modelRoutes = {};
+  if (keyId) {
+    data.settings.modelRoutes[modelId] = keyId;
+  } else {
+    delete data.settings.modelRoutes[modelId];
+  }
+  save(data);
+  return data.settings.modelRoutes;
+}
+
+function clearModelRoutes() {
+  const data = load();
+  data.settings.modelRoutes = {};
+  save(data);
+  return {};
+}
+
 module.exports = {
   init,
   getAllKeys,
@@ -233,4 +259,7 @@ module.exports = {
   regenerateUnifiedKey,
   getProxyPort,
   setProxyPort,
+  getModelRoutes,
+  setModelRoute,
+  clearModelRoutes,
 };
