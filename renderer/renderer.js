@@ -9,6 +9,8 @@ let busyIds = new Set();
 let visibleKeyIds = new Set();
 let proxyRunning = false;
 let currentMode = 'single'; // 'single' | 'batch'
+let modelsSearchQuery = '';
+let fetchingAllModels = false;
 
 // ─── DOM ───
 const $ = (id) => document.getElementById(id);
@@ -251,6 +253,11 @@ function bindEvents() {
   $('refresh-all').addEventListener('click', refreshAll);
   $('dedup-keys').addEventListener('click', dedupKeys);
   $('check-update').addEventListener('click', checkUpdate);
+  $('fetch-all-models').addEventListener('click', fetchAllModels);
+  $('models-search').addEventListener('input', (e) => {
+    modelsSearchQuery = e.target.value.trim().toLowerCase();
+    renderModelsPanel();
+  });
 
   $('modal-close').addEventListener('click', closeModal);
   $('modal-cancel').addEventListener('click', closeModal);
@@ -448,6 +455,7 @@ function renderList() {
   if (keys.length === 0) {
     emptyState.style.display = 'flex';
     keyList.style.display = 'none';
+    renderModelsPanel();
     return;
   }
   emptyState.style.display = 'none';
@@ -487,6 +495,98 @@ function renderList() {
       });
     }
   });
+
+  renderModelsPanel();
+}
+
+// ─── 可用模型面板 ───
+function renderModelsPanel() {
+  const panel = $('models-panel');
+  const body = $('models-panel-body');
+  const countEl = $('models-count');
+
+  // 无 Key 时隐藏面板
+  if (keys.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+
+  // 汇总所有 Key 的模型，记录每个模型来自哪些 Key
+  const modelMap = new Map(); // model -> [{ name, provider }]
+  keys.forEach((k) => {
+    if (k.lastModels && k.lastModels.length > 0) {
+      k.lastModels.forEach((m) => {
+        if (!modelMap.has(m)) modelMap.set(m, []);
+        const provider = providers.find((p) => p.key === k.provider);
+        modelMap.get(m).push({
+          name: k.name,
+          provider: provider ? provider.name : k.provider,
+        });
+      });
+    }
+  });
+
+  // 排序
+  let models = [...modelMap.keys()].sort((a, b) => a.localeCompare(b));
+
+  // 搜索过滤
+  if (modelsSearchQuery) {
+    models = models.filter((m) => m.toLowerCase().includes(modelsSearchQuery));
+  }
+
+  countEl.textContent = models.length;
+
+  if (models.length === 0) {
+    if (modelMap.size === 0) {
+      body.innerHTML = '<div class="models-panel-empty">尚未获取模型，点击「获取全部」</div>';
+    } else {
+      body.innerHTML = '<div class="models-panel-empty">没有匹配的模型</div>';
+    }
+    return;
+  }
+
+  body.innerHTML = models
+    .map((m) => {
+      const sources = modelMap.get(m);
+      const sourceNames = sources.map((s) => `${escapeHtml(s.name)}(${escapeHtml(s.provider)})`).join(', ');
+      const sourceCount = sources.length;
+      return `<span class="model-chip-lg" title="来自 ${sourceNames}">${escapeHtml(m)}<span class="model-chip-count">${sourceCount}</span></span>`;
+    })
+    .join('');
+}
+
+// ─── 获取所有 Key 的可用模型 ───
+async function fetchAllModels() {
+  if (keys.length === 0) return;
+  const btn = $('fetch-all-models');
+  btn.disabled = true;
+  fetchingAllModels = true;
+  keys.forEach((k) => busyIds.add(k.id));
+  renderList();
+
+  let ok = 0;
+  let fail = 0;
+  await Promise.all(
+    keys.map(async (k) => {
+      const result = await window.api.keys.models(k.id);
+      if (result.error) {
+        fail++;
+      } else {
+        ok++;
+      }
+      busyIds.delete(k.id);
+    }),
+  );
+
+  fetchingAllModels = false;
+  btn.disabled = false;
+  await refreshKeys();
+  if (fail > 0) {
+    showToast(`获取完成: ${ok} 成功, ${fail} 失败`, 'error', 3000);
+  } else {
+    showToast(`已获取 ${ok} 个 Key 的模型`, 'success', 2000);
+  }
 }
 
 function renderCard(k) {
