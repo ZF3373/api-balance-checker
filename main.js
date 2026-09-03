@@ -26,7 +26,7 @@ function createWindow() {
     minWidth: 860,
     minHeight: 560,
     title: 'KeyHub · API Key 聚合 & 余额查询',
-    backgroundColor: '#0f1014',
+    backgroundColor: '#131417',
     show: false,
     icon: path.join(__dirname, 'build', 'icon.svg'),
     webPreferences: {
@@ -261,7 +261,8 @@ ipcMain.handle('keys:models', async (_e, id) => {
   }
 });
 
-// 连接测试（GET /v1/models，不消耗 token）
+// 连接测试：先验证连通性（GET /v1/models），再查余额。
+// 余额 ≤ 0 视为"余额不足"，不当作连接正常。
 ipcMain.handle('keys:test', async (_e, id) => {
   const item = store.getKey(id);
   if (!item) return { error: 'Key 不存在' };
@@ -272,28 +273,53 @@ ipcMain.handle('keys:test', async (_e, id) => {
   const baseUrl = item.baseUrl || provider.defaultBaseUrl;
   if (!baseUrl) return { error: '缺少 baseUrl' };
 
+  const now = new Date().toISOString();
+
+  // 第一步：连通性测试
+  let modelCount = 0;
   try {
     const res = await fetchUpstreamModels(baseUrl, item.apiKey, 10000);
-    const now = new Date().toISOString();
-    if (res.statusCode === 200) {
-      let modelCount = 0;
-      try {
-        const json = await readJson(res);
-        modelCount = (json.data || []).length;
-      } catch { /* 非 JSON 也算连接正常 */ }
-      store.updateKey(id, { lastTestStatus: 'ok', lastTestError: null, lastTestTime: now });
-      return { ok: true, modelCount };
-    } else {
+    if (res.statusCode !== 200) {
       const msg = `HTTP ${res.statusCode}`;
       res.resume();
       store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: now });
       return { ok: false, error: msg };
     }
+    try {
+      const json = await readJson(res);
+      modelCount = (json.data || []).length;
+    } catch { /* 非 JSON 也算连通正常 */ }
   } catch (err) {
     const msg = err.message || String(err);
-    store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: new Date().toISOString() });
+    store.updateKey(id, { lastTestStatus: 'error', lastTestError: msg, lastTestTime: now });
     return { ok: false, error: msg };
   }
+
+  // 第二步：余额检查（平台不支持时跳过，不影响连通性判定）
+  let balance = null;
+  let balanceError = null;
+  try {
+    const balanceResult = await provider.queryBalance(baseUrl, item.apiKey, {
+      customBalancePath: item.customBalancePath,
+      customJsonPath: item.customJsonPath,
+      customCurrency: item.customCurrency,
+    });
+    balance = balanceResult.balance;
+    // 顺便刷新余额缓存
+    store.setQueryResult(id, balanceResult);
+  } catch (err) {
+    balanceError = err.message || String(err);
+  }
+
+  // 综合判定：连通 OK 但余额 ≤ 0 → 余额不足
+  if (balance != null && balance <= 0) {
+    store.updateKey(id, { lastTestStatus: 'insufficient', lastTestError: null, lastTestTime: now });
+    return { ok: true, insufficient: true, modelCount, balance };
+  }
+
+  // 余额未知（不支持 / 查询失败）或余额 > 0 → 连接正常
+  store.updateKey(id, { lastTestStatus: 'ok', lastTestError: null, lastTestTime: now });
+  return { ok: true, modelCount, balance, balanceError };
 });
 
 // ────────────────────── 聚合代理服务器 ──────────────────────

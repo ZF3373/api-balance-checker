@@ -26,6 +26,21 @@ const batchFields = $('batch-fields');
 const apikeysTextarea = $('f-apikeys');
 const batchCount = $('batch-count');
 
+// ─── SVG 图标 ───
+const icon = (paths, size = 15) =>
+  `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+
+const ICONS = {
+  refresh: icon('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>'),
+  copy: icon('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
+  eye: icon('<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>'),
+  eyeOff: icon('<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>'),
+  cpu: icon('<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2"/><path d="M15 2v2"/><path d="M9 20v2"/><path d="M15 20v2"/><path d="M2 9h2"/><path d="M2 15h2"/><path d="M20 9h2"/><path d="M20 15h2"/>'),
+  zap: icon('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'),
+  edit: icon('<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>'),
+  trash: icon('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>'),
+};
+
 // ─── Toast 通知 ───
 function showToast(msg, type = 'info', duration = 3000) {
   const container = $('toast-container');
@@ -176,7 +191,7 @@ function handleUpdateStatus(status) {
 
   // 恢复检查按钮
   const btn = $('check-update');
-  btn.innerHTML = '🔄';
+  btn.innerHTML = ICONS.refresh;
   btn.disabled = false;
 
   if (status.notAvailable) {
@@ -217,7 +232,7 @@ async function checkUpdate() {
   btn.disabled = true;
   const result = await window.api.updater.check();
   if (!result.ok) {
-    btn.innerHTML = '🔄';
+    btn.innerHTML = ICONS.refresh;
     btn.disabled = false;
     showToast('检查失败: ' + (result.error || ''), 'error');
   }
@@ -510,6 +525,8 @@ function renderCard(k) {
   let testIndicator = '';
   if (k.lastTestStatus === 'ok') {
     testIndicator = ` · <span class="test-ok">连接正常</span>`;
+  } else if (k.lastTestStatus === 'insufficient') {
+    testIndicator = ` · <span class="test-warn">余额不足</span>`;
   } else if (k.lastTestStatus === 'error') {
     testIndicator = ` · <span class="test-err" title="${escapeHtml(k.lastTestError || '')}">连接异常</span>`;
   }
@@ -538,8 +555,8 @@ function renderCard(k) {
         </div>
         <div class="key-meta">
           <span class="key-text" title="${isKeyVisible ? '' : '点击眼睛查看完整 Key'}">${escapeHtml(displayKey)}</span>
-          <button class="btn-key-toggle" data-id="${k.id}" title="${isKeyVisible ? '隐藏' : '显示'} Key">${isKeyVisible ? '🙈' : '👁'}</button>
-          <button class="btn-key-copy" data-id="${k.id}" title="复制 Key">📋</button>
+          <button class="btn-key-toggle" data-id="${k.id}" title="${isKeyVisible ? '隐藏' : '显示'} Key">${isKeyVisible ? ICONS.eyeOff : ICONS.eye}</button>
+          <button class="btn-key-copy" data-id="${k.id}" title="复制 Key">${ICONS.copy}</button>
           ${k.baseUrl ? ' · ' + escapeHtml(k.baseUrl) : ''}${testIndicator}
         </div>
         <div class="key-balance">${balanceHtml}</div>
@@ -547,10 +564,10 @@ function renderCard(k) {
       </div>
       <div class="key-actions">
         <button class="btn btn-sm btn-primary btn-query" ${isQuerying || isBusy ? 'disabled' : ''} title="查询余额">查询</button>
-        <button class="btn btn-sm btn-icon btn-models" ${isBusy ? 'disabled' : ''} title="获取可用模型">${isBusy ? '<span class="spinner"></span>' : '🤖'}</button>
-        <button class="btn btn-sm btn-icon btn-test" ${isBusy ? 'disabled' : ''} title="测试连接">${isBusy ? '<span class="spinner"></span>' : '⚡'}</button>
-        <button class="btn btn-sm btn-icon btn-edit" title="编辑">✎</button>
-        <button class="btn btn-sm btn-icon btn-del" title="删除">🗑</button>
+        <button class="btn btn-sm btn-icon btn-models" ${isBusy ? 'disabled' : ''} title="获取可用模型">${isBusy ? '<span class="spinner"></span>' : ICONS.cpu}</button>
+        <button class="btn btn-sm btn-icon btn-test" ${isBusy ? 'disabled' : ''} title="测试连接">${isBusy ? '<span class="spinner"></span>' : ICONS.zap}</button>
+        <button class="btn btn-sm btn-icon btn-edit" title="编辑">${ICONS.edit}</button>
+        <button class="btn btn-sm btn-icon btn-del" title="删除">${ICONS.trash}</button>
       </div>
       ${modelsHtml}
     </div>
@@ -587,7 +604,9 @@ async function testConnection(id) {
   const result = await window.api.keys.test(id);
   busyIds.delete(id);
   await refreshKeys();
-  if (result.ok) {
+  if (result.insufficient) {
+    showToast(`连接正常但余额不足（余额: ${formatBalance(result.balance)}）`, 'error');
+  } else if (result.ok) {
     showToast('连接正常' + (result.modelCount ? ` · ${result.modelCount} 个模型` : ''), 'success', 1500);
   } else {
     showToast('连接异常: ' + (result.error || '未知错误'), 'error');
@@ -606,7 +625,7 @@ async function refreshAll() {
   } finally {
     keys.forEach((k) => queryingIds.delete(k.id));
     btn.disabled = false;
-    btn.innerHTML = '↻ 刷新全部';
+    btn.innerHTML = ICONS.refresh + ' 刷新全部';
     await refreshKeys();
   }
 }
