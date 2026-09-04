@@ -68,6 +68,36 @@ function sendJson(res, status, body) {
   res.end(json);
 }
 
+/**
+ * 为多轮对话中的 assistant 消息补全 reasoning_content 字段。
+ *
+ * 部分上游（如基元律动 / LiteLLM 代理的思考模型）要求多轮对话中
+ * assistant 消息必须携带 reasoning_content，否则返回 400：
+ *   "The `reasoning_content` in the thinking mode must be passed back to the API."
+ * 客户端（ChatBox / NextChat 等）可能未保存该字段，此处补空值以兼容。
+ * 返回 { body, modified } —— modified 为 true 时 body 是新 Buffer。
+ */
+function ensureReasoningContent(rawBody) {
+  try {
+    const parsed = JSON.parse(rawBody.toString('utf8'));
+    if (Array.isArray(parsed.messages)) {
+      let modified = false;
+      for (const msg of parsed.messages) {
+        if (msg && msg.role === 'assistant' && !('reasoning_content' in msg)) {
+          msg.reasoning_content = '';
+          modified = true;
+        }
+      }
+      if (modified) {
+        return { body: Buffer.from(JSON.stringify(parsed), 'utf8'), modified: true };
+      }
+    }
+  } catch {
+    // body 不是 JSON，原样返回
+  }
+  return { body: rawBody, modified: false };
+}
+
 // ─── 模型路由表构建 ───
 
 /**
@@ -311,12 +341,16 @@ async function handleForward(method, upstreamPath, reqBody, reqHeaders, res) {
 // ─── 各端点薄封装 ───
 
 async function handleChatCompletions(req, res, body) {
+  const { body: fixedBody, modified } = ensureReasoningContent(body);
+  // body 被修改时删除 content-length，让 fetch 按实际字节数重新计算
+  const headers = modified ? { ...req.headers } : req.headers;
+  if (modified) delete headers['content-length'];
   await forwardWithFailover({
-    keyEntries: getCandidateKeys(body),
+    keyEntries: getCandidateKeys(fixedBody),
     method: 'POST',
     upstreamPath: 'v1/chat/completions',
-    body,
-    reqHeaders: req.headers,
+    body: fixedBody,
+    reqHeaders: headers,
     res,
   });
 }
