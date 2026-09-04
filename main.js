@@ -364,7 +364,11 @@ function sendUpdateStatus() {
  * 用 Node.js https 模块发起 GET 请求（自动跟随重定向，跳过证书验证）。
  * 不用 fetch，因为 Electron 主进程的 fetch 不受 setCertificateVerifyProc 影响，
  * 在证书链不完整的环境下会失败。
- * options.onData(chunk) 可选：流式接收数据块（用于下载进度回调）。
+ *
+ * 两种工作模式：
+ * - 元数据请求（无 onData）：响应头到达即可 resolve，调用方自行读取 body。
+ * - 下载请求（有 onData）：等整个 body 通过 onData 接收完毕再 resolve，
+ *   避免调用方在数据未传完时关闭文件流导致 0 字节文件。
  */
 function httpsGet(url, options = {}, redirectCount = 0) {
   return new Promise((resolve, reject) => {
@@ -386,12 +390,23 @@ function httpsGet(url, options = {}, redirectCount = 0) {
         httpsGet(res.headers.location, options, redirectCount + 1).then(resolve).catch(reject);
         return;
       }
-      // 流式回调（下载场景）
+
       if (options.onData) {
+        // 下载模式：流式接收完整 body 后再 resolve
         res.on('data', (chunk) => options.onData(chunk));
+        res.on('end', () => {
+          clearTimeout(timer);
+          resolve(res);
+        });
+        res.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      } else {
+        // 元数据模式：响应头到达即可，调用方自行读取 body
+        clearTimeout(timer);
+        resolve(res);
       }
-      clearTimeout(timer);
-      resolve(res);
     });
 
     req.on('error', (err) => {
@@ -456,6 +471,7 @@ async function fetchLatestNightly() {
 
 /**
  * 用 httpsGet 下载安装包（复用重定向 + 跳过证书逻辑），带进度回调。
+ * 下载完成后校验文件大小，失败时清理残留文件避免后续误用。
  */
 async function downloadInstaller(assetUrl, totalSize) {
   const tmpDir = os.tmpdir();
@@ -464,34 +480,50 @@ async function downloadInstaller(assetUrl, totalSize) {
   const fileStream = fs.createWriteStream(filePath);
   let received = 0;
 
-  const res = await httpsGet(assetUrl, {
-    headers: { 'User-Agent': 'keyhub-updater' },
-    timeout: 300000,
-    onData: (chunk) => {
-      fileStream.write(chunk);
-      received += chunk.length;
-      const contentLength = totalSize || parseInt(res.headers['content-length'] || '0', 10);
-      if (contentLength > 0) {
-        const pct = Math.round((received / contentLength) * 100);
-        updateInfo = { ...updateInfo, progress: pct };
-        sendUpdateStatus();
-      }
-    },
-  });
+  try {
+    const res = await httpsGet(assetUrl, {
+      headers: { 'User-Agent': 'keyhub-updater' },
+      timeout: 300000,
+      onData: (chunk) => {
+        fileStream.write(chunk);
+        received += chunk.length;
+        const contentLength = totalSize || parseInt(res.headers['content-length'] || '0', 10);
+        if (contentLength > 0) {
+          const pct = Math.round((received / contentLength) * 100);
+          updateInfo = { ...updateInfo, progress: pct };
+          sendUpdateStatus();
+        }
+      },
+    });
 
-  if (res.statusCode !== 200) {
-    throw new Error(`下载失败 HTTP ${res.statusCode}`);
+    if (res.statusCode !== 200) {
+      throw new Error(`下载失败 HTTP ${res.statusCode}`);
+    }
+
+    // 等待文件写入完成
+    await new Promise((resolve, reject) => {
+      fileStream.on('finish', resolve);
+      fileStream.on('error', reject);
+      fileStream.end();
+    });
+
+    // 校验下载完整性
+    const actualSize = fs.statSync(filePath).size;
+    if (actualSize === 0) {
+      throw new Error('下载的安装包为 0 字节');
+    }
+    if (totalSize > 0 && actualSize !== totalSize) {
+      throw new Error(`下载不完整: ${actualSize}/${totalSize} 字节`);
+    }
+
+    downloadedInstallerPath = filePath;
+    return filePath;
+  } catch (err) {
+    // 下载失败时清理残留文件，避免后续误用 0 字节文件
+    fileStream.destroy();
+    try { fs.unlinkSync(filePath); } catch { /* 文件可能不存在 */ }
+    throw err;
   }
-
-  // 等待文件写入完成
-  await new Promise((resolve, reject) => {
-    fileStream.on('finish', resolve);
-    fileStream.on('error', reject);
-    fileStream.end();
-  });
-
-  downloadedInstallerPath = filePath;
-  return filePath;
 }
 
 ipcMain.handle(CH.updateCheck, async () => {
@@ -536,6 +568,17 @@ ipcMain.handle(CH.updateCheck, async () => {
 
 ipcMain.handle(CH.updateInstall, () => {
   if (!downloadedInstallerPath) return { ok: false, error: '安装包未下载' };
+  // 启动前校验文件存在且非空，避免 0 字节损坏文件导致安装程序报错
+  try {
+    const stat = fs.statSync(downloadedInstallerPath);
+    if (stat.size === 0) {
+      downloadedInstallerPath = null;
+      return { ok: false, error: '安装包文件损坏（0 字节），请重新检查更新' };
+    }
+  } catch {
+    downloadedInstallerPath = null;
+    return { ok: false, error: '安装包文件不存在，请重新检查更新' };
+  }
   // 用 shell.openPath 启动 NSIS 安装包（会触发 UAC 提权），
   // 延迟退出让安装程序有时间启动
   const installerPath = downloadedInstallerPath;
